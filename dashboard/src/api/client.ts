@@ -1,7 +1,19 @@
 import axios from 'axios'
 import type { Agent, Incident, Screenshot, Policy, BlockedDomain, TimelineResponse } from './types'
 
+export const TOKEN_KEY = 'qorgau_token'
+
 const http = axios.create({ baseURL: '/api/v1' })
+
+// Attach JWT synchronously on every request so page reload never races with 401
+http.interceptors.request.use((config) => {
+  const tok = localStorage.getItem(TOKEN_KEY)
+  if (tok && !config.headers.Authorization) {
+    config.headers.Authorization = `Bearer ${tok}`
+  }
+  return config
+})
+
 export default http
 
 // ── Agents ──────────────────────────────────────────────────────────────────
@@ -29,6 +41,9 @@ export const fetchIncidentStats = () =>
     by_channel: Record<string, number>
   }>('/incidents/stats').then(r => r.data)
 
+export const fetchIncidentById = (id: number) =>
+  http.get<Incident>(`/incidents/${id}`).then(r => r.data)
+
 export const patchIncident = (id: number, status: string) =>
   http.patch(`/incidents/${id}`, { status })
 
@@ -42,23 +57,21 @@ export const fetchAgentStats = () =>
 
 // ── Screenshots ──────────────────────────────────────────────────────────────
 // GET /screenshots → { total, items }
+export const fetchScreenshotsPaged = (params?: Record<string, unknown>) =>
+  http.get<{ total: number; items: Screenshot[] }>('/screenshots', { params }).then(r => r.data)
+
 export const fetchScreenshots = (params?: Record<string, unknown>) =>
-  http.get<{ total: number; items: Screenshot[] }>('/screenshots', { params })
-    .then(r => r.data.items)
+  fetchScreenshotsPaged(params).then(d => d.items)
 
 export const fetchLatestScreenshot = (agentId: string) =>
-  http.get<Screenshot>(`/screenshots/latest?agent_id=${agentId}`).then(r => r.data)
+  http.get<Screenshot[]>('/screenshots/latest', { params: { agent_id: agentId } }).then(r => r.data[0] ?? null)
 
 export const deleteScreenshot = (id: number) => http.delete(`/screenshots/${id}`)
 
-export const screenshotUrl = (id: number) => {
-  // <img> не шлёт заголовок Authorization — передаём JWT через query-параметр
-  const token = localStorage.getItem('qorgau_token')
-  return `/api/v1/screenshots/${id}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`
-}
+export const screenshotPath = (id: number) => `/screenshots/${id}/image`
 
 export const triggerScreenshot = (agentId: string) =>
-  http.post(`/screenshots/trigger?agent_id=${agentId}`)
+  http.post('/screenshots/trigger', null, { params: { agent_id: agentId } })
 
 // ── Policies ─────────────────────────────────────────────────────────────────
 // GET /rules → plain array
@@ -277,10 +290,10 @@ export interface AudioRecording {
 export const fetchAudioRecordings = (params?: Record<string, unknown>) =>
   http.get<{ total: number; items: AudioRecording[] }>('/audio', { params }).then(r => r.data)
 
-export const audioDownloadUrl = (id: number) => {
-  const token = localStorage.getItem('qorgau_token')
-  return `/api/v1/audio/${id}/download${token ? `?token=${encodeURIComponent(token)}` : ''}`
-}
+export const audioDownloadPath = (id: number) => `/audio/${id}/download`
+
+export const downloadAudioRecording = (id: number) =>
+  downloadFile(`/audio/${id}/download`, `recording_${id}.wav`)
 
 export const deleteAudioRecording = (id: number) =>
   http.delete(`/audio/${id}`)
@@ -298,10 +311,7 @@ export interface WebcamPhotoItem {
 export const fetchWebcamPhotos = (params?: Record<string, unknown>) =>
   http.get<{ total: number; items: WebcamPhotoItem[] }>('/webcam', { params }).then(r => r.data)
 
-export const webcamPhotoUrl = (id: number) => {
-  const token = localStorage.getItem('qorgau_token')
-  return `/api/v1/webcam/${id}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`
-}
+export const webcamPhotoPath = (id: number) => `/webcam/${id}/image`
 
 export const deleteWebcamPhoto = (id: number) =>
   http.delete(`/webcam/${id}`)

@@ -1,0 +1,39 @@
+[package]
+name = "qorgau-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+qorgau-common = { path = "../qorgau-common" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+regex.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "limit"] }
+futures-util = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json", "migrate", "macros"] }
+argon2 = "0.5"
+hmac = "0.12"
+base64 = "0.22"
+subtle = "2.6"
+dashmap = "6"
+arc-swap = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+rust_xlsxwriter = "0.80"
+csv = "1.3"
+tokio-util = { version = "0.7", features = ["io"] }
+dotenvy = "0.15"
+
+[dev-dependencies]
+uuid.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

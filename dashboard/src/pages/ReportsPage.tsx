@@ -157,26 +157,26 @@ function AgentsReport() {
   if (!data) return null
 
   return (
-    <Row gutter={16}>
-      <Col span={8}>
+    <Row gutter={[16, 16]}>
+      <Col xs={24} sm={8}>
         <Card>
-          <Statistic title="Всего агентов" value={data.total_agents ?? 0} />
+          <Statistic title="Всего агентов" value={data.total ?? data.total_agents ?? 0} />
         </Card>
       </Col>
-      <Col span={8}>
+      <Col xs={24} sm={8}>
         <Card>
           <Statistic
             title="Онлайн"
-            value={data.online_agents ?? 0}
+            value={data.online ?? data.online_agents ?? 0}
             valueStyle={{ color: '#3f8600' }}
           />
         </Card>
       </Col>
-      <Col span={8}>
+      <Col xs={24} sm={8}>
         <Card>
           <Statistic
             title="Офлайн"
-            value={data.offline_agents ?? 0}
+            value={data.offline ?? data.offline_agents ?? 0}
             valueStyle={{ color: '#cf1322' }}
           />
         </Card>
@@ -194,29 +194,37 @@ function ComplianceReport() {
   if (isLoading) return <Spin style={{ display: 'block', margin: '40px auto' }} />
   if (!data) return null
 
-  const reqs: { id: string; name: string; status: string; description: string }[] =
-    Array.isArray(data) ? data : (data.requirements ?? [])
+  const reqs: { id: string; name: string; law_ref?: string; status: string; description: string; details?: string }[] =
+    Array.isArray(data) ? data : (Array.isArray(data.requirements) ? data.requirements : [])
+
+  const statusMeta = (v: string) => {
+    if (v === 'compliant' || v === 'implemented') return { color: 'green', label: 'Выполнено' }
+    if (v === 'warning' || v === 'partial') return { color: 'gold', label: 'Предупреждение' }
+    return { color: 'red', label: 'Не выполнено' }
+  }
 
   return (
-    <Card title="Требования законодательства РК в области ИБ">
+    <Card
+      title="Требования законодательства РК в области ИБ"
+      extra={data.score_pct != null ? <Tag color={data.score_pct >= 80 ? 'green' : 'orange'}>Соответствие: {data.score_pct}%</Tag> : null}
+    >
       <Table
         dataSource={reqs}
         rowKey="id"
         size="small"
         pagination={false}
         columns={[
-          { title: 'ID', dataIndex: 'id', width: 80 },
+          { title: 'Норма', dataIndex: 'law_ref', width: 200, render: (v: string, r) => v || r.id },
           { title: 'Требование', dataIndex: 'name' },
-          { title: 'Описание', dataIndex: 'description' },
+          { title: 'Подробности', dataIndex: 'details', render: (v: string, r) => v || r.description },
           {
             title: 'Статус',
             dataIndex: 'status',
-            width: 120,
-            render: (v: string) => (
-              <Tag color={v === 'implemented' ? 'green' : v === 'partial' ? 'gold' : 'red'}>
-                {v === 'implemented' ? 'Выполнено' : v === 'partial' ? 'Частично' : 'Не выполнено'}
-              </Tag>
-            ),
+            width: 140,
+            render: (v: string) => {
+              const m = statusMeta(v)
+              return <Tag color={m.color}>{m.label}</Tag>
+            },
           },
         ]}
       />
@@ -230,7 +238,7 @@ export default function ReportsPage() {
     dayjs().subtract(30, 'day'), dayjs(),
   ])
 
-  const days = dateRange[1].diff(dateRange[0], 'day') || 30
+  const days = Math.min(365, Math.max(1, dateRange[1].diff(dateRange[0], 'day') + 1))
 
   const runDownload = async (fn: () => Promise<void>) => {
     try {

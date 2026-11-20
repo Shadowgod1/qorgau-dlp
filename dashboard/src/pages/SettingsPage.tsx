@@ -47,7 +47,8 @@ function PoliciesTab() {
   })
 
   const createMutation = useMutation({
-    mutationFn: (data: Partial<Policy>) => editing ? updatePolicy(editing.id, data) : createPolicy(data),
+    mutationFn: (data: Partial<Policy>) =>
+      editing ? updatePolicy(editing.id, { ...data, enabled: editing.enabled }) : createPolicy(data),
     onSuccess: () => {
       message.success(editing ? 'Политика обновлена' : 'Политика создана')
       qc.invalidateQueries({ queryKey: ['policies'] })
@@ -55,12 +56,29 @@ function PoliciesTab() {
       setEditing(null)
       form.resetFields()
     },
-    onError: () => message.error('Ошибка сохранения'),
+    onError: () => message.error('Ошибка сохранения политики'),
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ rec, enabled }: { rec: Policy; enabled: boolean }) =>
+      updatePolicy(rec.id, {
+        name: rec.name,
+        channel: rec.channel,
+        action: rec.action,
+        severity: rec.severity,
+        pattern: rec.pattern,
+        enabled,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['policies'] })
+    },
+    onError: () => message.error('Ошибка переключения политики'),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deletePolicy(id),
     onSuccess: () => { message.success('Удалено'); qc.invalidateQueries({ queryKey: ['policies'] }) },
+    onError: () => message.error('Ошибка удаления'),
   })
 
   const openCreate = () => { setEditing(null); form.resetFields(); setModalOpen(true) }
@@ -91,7 +109,7 @@ function PoliciesTab() {
         <Switch
           checked={v}
           size="small"
-          onChange={en => createMutation.mutate({ ...rec, enabled: en })}
+          onChange={en => toggleMutation.mutate({ rec, enabled: en })}
         />
       ),
     },
@@ -249,10 +267,15 @@ function OperatorsTab() {
   })
 
   const saveMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      editing
-        ? updateOperator(editing.id, data)
-        : createOperator(data as { username: string; password: string; role: string }),
+    mutationFn: (data: Record<string, unknown>) => {
+      const payload = { ...data }
+      if (editing && (!payload.password || String(payload.password).trim() === '')) {
+        delete payload.password
+      }
+      return editing
+        ? updateOperator(editing.id, payload)
+        : createOperator(payload as { username: string; password: string; role: string })
+    },
     onSuccess: () => {
       message.success(editing ? 'Оператор обновлён' : 'Оператор создан')
       qc.invalidateQueries({ queryKey: ['operators'] })
@@ -341,7 +364,7 @@ function OperatorsTab() {
           <Form.Item
             name="password"
             label={editing ? 'Новый пароль (оставьте пустым, чтобы не менять)' : 'Пароль'}
-            rules={editing ? [] : [{ required: true, min: 6 }]}
+            rules={editing ? [] : [{ required: true, min: 8, message: 'Минимум 8 символов' }]}
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>

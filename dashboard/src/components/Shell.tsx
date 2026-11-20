@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Layout, Menu, Avatar, Dropdown, Button, Badge, theme as antTheme } from 'antd'
+import { useCallback, useState } from 'react'
+import { Layout, Menu, Avatar, Dropdown, Button, Badge, Tooltip, theme as antTheme } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   DashboardOutlined,
@@ -22,25 +22,51 @@ import {
 import { useNavigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
-import { useQuery } from '@tanstack/react-query'
-import { fetchIncidents } from '../api/client'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchIncidentsPaged } from '../api/client'
+import { useWebSocket } from '../hooks/useWebSocket'
+import type { WsMessage } from '../api/types'
 import { ErrorBoundary } from './ErrorBoundary'
 
 const { Sider, Header, Content } = Layout
 
 export default function Shell() {
-  const { user, logout } = useAuth()
+  const { token: authToken, user, logout } = useAuth()
   const { theme, toggle } = useTheme()
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const qc = useQueryClient()
   const [collapsed, setCollapsed] = useState(false)
   const { token } = antTheme.useToken()
 
+  const isAdmin = user?.role === 'admin'
+  const isOfficer = user?.role === 'admin' || user?.role === 'security_officer'
+
+  const handleWsMsg = useCallback(
+    (msg: WsMessage) => {
+      if (msg.type === 'incident') {
+        qc.invalidateQueries({ queryKey: ['incidents'] })
+        qc.invalidateQueries({ queryKey: ['incidents-all'] })
+        qc.invalidateQueries({ queryKey: ['incidents-open-count'] })
+        qc.invalidateQueries({ queryKey: ['incidents-open-paged'] })
+        qc.invalidateQueries({ queryKey: ['incident-stats'] })
+      } else if (msg.type === 'screenshot') {
+        qc.invalidateQueries({ queryKey: ['screenshots-recent'] })
+      } else if ((msg as { type: string }).type === 'webcam') {
+        qc.invalidateQueries({ queryKey: ['webcam'] })
+      } else if ((msg as { type: string }).type === 'audio') {
+        qc.invalidateQueries({ queryKey: ['audio'] })
+      }
+    },
+    [qc],
+  )
+  const { connected: wsConnected } = useWebSocket(authToken, handleWsMsg)
+
   const { data: openCount = 0 } = useQuery({
     queryKey: ['incidents-open-count'],
-    queryFn: () => fetchIncidents({ status: 'open', limit: 100 }),
+    queryFn: () => fetchIncidentsPaged({ status: 'open', limit: 1 }),
     refetchInterval: 30_000,
-    select: (data) => (Array.isArray(data) ? data.length : 0),
+    select: (data) => data.total ?? 0,
   })
 
   const navItems: MenuProps['items'] = [
@@ -61,10 +87,10 @@ export default function Shell() {
     },
     { key: '/analytics', icon: <BarChartOutlined />,   label: 'Аналитика' },
     { key: '/activity',  icon: <ClockCircleOutlined />, label: 'Активность' },
-    { key: '/configs',       icon: <ApartmentOutlined />,    label: 'Конфигурации' },
+    ...(isAdmin ? [{ key: '/configs', icon: <ApartmentOutlined />, label: 'Конфигурации' }] : []),
     { key: '/reports',       icon: <FileTextOutlined />,     label: 'Отчёты' },
-    { key: '/surveillance',  icon: <VideoCameraOutlined />,  label: 'Наблюдение' },
-    { key: '/settings',      icon: <SettingOutlined />,      label: 'Настройки' },
+    ...(isOfficer ? [{ key: '/surveillance', icon: <VideoCameraOutlined />, label: 'Наблюдение' }] : []),
+    ...(isAdmin ? [{ key: '/settings', icon: <SettingOutlined />, label: 'Настройки' }] : []),
   ]
 
   const userMenuItems: MenuProps['items'] = [
@@ -134,7 +160,10 @@ export default function Shell() {
             onClick={() => setCollapsed(v => !v)}
           />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Tooltip title={wsConnected ? 'Real-time WebSocket активен' : 'Подключение к WebSocket...'}>
+              <Badge status={wsConnected ? 'success' : 'warning'} />
+            </Tooltip>
             <Button
               type="text"
               icon={<BulbOutlined />}

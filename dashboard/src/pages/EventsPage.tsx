@@ -143,7 +143,7 @@ export default function EventsPage() {
           <Table
             dataSource={data?.items || []}
             columns={columns}
-            rowKey="id"
+            rowKey={(r) => `${r.type}-${r.id}`}
             size="small"
             pagination={{
               current: page,

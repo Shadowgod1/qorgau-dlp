@@ -6,8 +6,9 @@ import {
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
-import { fetchIncidentsPaged, patchIncident, fetchAgents } from '../api/client'
+import { fetchIncidentsPaged, fetchIncidentById, patchIncident, fetchAgents } from '../api/client'
 import type { Incident, Severity, IncidentStatus } from '../api/types'
+import { useAuth } from '../context/AuthContext'
 
 const { Title } = Typography
 
@@ -28,6 +29,8 @@ const SEV_OPTIONS = ['critical','high','medium','low'].map(s => ({ label: s, val
 
 export default function IncidentsPage() {
   const qc = useQueryClient()
+  const { user } = useAuth()
+  const canEdit = user?.role === 'admin' || user?.role === 'security_officer'
   const [selected, setSelected] = useState<Incident | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
@@ -42,6 +45,7 @@ export default function IncidentsPage() {
   if (statusFilter) params.status = statusFilter
   if (sevFilter) params.severity = sevFilter
   if (agentId) params.agent_id = agentId
+  if (search.trim()) params.search = search.trim()
 
   const { data: paged, isLoading, refetch } = useQuery({
     queryKey: ['incidents', params],
@@ -54,19 +58,29 @@ export default function IncidentsPage() {
 
   const patchMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => patchIncident(id, status),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       message.success('Статус обновлён')
+      setSelected(prev => prev && prev.id === vars.id ? { ...prev, status: vars.status as IncidentStatus } : prev)
       qc.invalidateQueries({ queryKey: ['incidents'] })
       qc.invalidateQueries({ queryKey: ['incidents-all'] })
+      qc.invalidateQueries({ queryKey: ['incidents-open-count'] })
+      qc.invalidateQueries({ queryKey: ['incidents-open-paged'] })
       qc.invalidateQueries({ queryKey: ['incident-stats'] })
     },
+    onError: () => message.error('Недостаточно прав или ошибка обновления статуса'),
   })
 
-  const filtered = incidents.filter(i =>
-    !search || i.hostname.toLowerCase().includes(search.toLowerCase()) ||
-    i.username.toLowerCase().includes(search.toLowerCase()) ||
-    (i.snippet || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const openIncident = async (rec: Incident) => {
+    setSelected(rec)
+    try {
+      const full = await fetchIncidentById(rec.id)
+      setSelected(full)
+    } catch {
+      // keep row preview
+    }
+  }
+
+  const filtered = incidents
 
   const columns = [
     {
@@ -90,6 +104,7 @@ export default function IncidentsPage() {
         <Select
           value={v}
           size="small"
+          disabled={!canEdit}
           style={{ width: 155 }}
           options={STATUS_OPTIONS}
           onChange={(val) => patchMutation.mutate({ id: rec.id, status: val })}
@@ -168,7 +183,7 @@ export default function IncidentsPage() {
             rowKey="id"
             size="small"
             pagination={{ current: page, pageSize: PAGE_SIZE, total: totalCount, onChange: setPage, showTotal: t => `Всего: ${t}` }}
-            onRow={rec => ({ onClick: () => setSelected(rec), style: { cursor: 'pointer' } })}
+            onRow={rec => ({ onClick: () => openIncident(rec), style: { cursor: 'pointer' } })}
             scroll={{ x: 1000 }}
             rowClassName={rec => rec.severity === 'critical' ? 'critical-row' : ''}
           />
@@ -181,7 +196,7 @@ export default function IncidentsPage() {
         onClose={() => setSelected(null)}
         width={500}
         extra={
-          selected && (
+          selected && canEdit && (
             <Space>
               <Button size="small" onClick={() => patchMutation.mutate({ id: selected.id, status: 'resolved' })}>
                 Закрыть

@@ -8,8 +8,18 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
 import dayjs from 'dayjs'
-import { fetchIncidents, fetchIncidentsPaged, fetchAgents, fetchIncidentStats, fetchScreenshots, screenshotUrl } from '../api/client'
+import { fetchIncidents, fetchIncidentsPaged, fetchAgents, fetchIncidentStats, fetchScreenshotsPaged, screenshotPath } from '../api/client'
 import type { Incident } from '../api/types'
+import { useAuth } from '../context/AuthContext'
+import { useAuthMediaUrl } from '../hooks/useAuthMedia'
+
+function AuthScreenshotThumb({ id }: { id: number }) {
+  const src = useAuthMediaUrl(screenshotPath(id))
+  if (!src) {
+    return <div style={{ width: '100%', height: 90, borderRadius: 4, opacity: 0.2, background: '#888' }} />
+  }
+  return <Image src={src} style={{ width: '100%', height: 90, objectFit: 'cover', borderRadius: 4 }} />
+}
 
 const { Title } = Typography
 
@@ -46,19 +56,26 @@ const RECENT_COLS = [
 ]
 
 function buildDailyData(incidents: Incident[]) {
-  const map: Record<string, Record<string, number>> = {}
+  const map: Record<string, { label: string; critical: number; high: number; medium: number; low: number }> = {}
   incidents.forEach(inc => {
-    const day = dayjs(inc.created_at!).format('DD.MM')
-    if (!map[day]) map[day] = { critical: 0, high: 0, medium: 0, low: 0 }
-    map[day][inc.severity] = (map[day][inc.severity] || 0) + 1
+    if (!inc.created_at) return
+    const key = dayjs(inc.created_at).format('YYYY-MM-DD')
+    const label = dayjs(inc.created_at).format('DD.MM')
+    if (!map[key]) map[key] = { label, critical: 0, high: 0, medium: 0, low: 0 }
+    if (inc.severity in map[key]) {
+      map[key][inc.severity as 'critical' | 'high' | 'medium' | 'low'] += 1
+    }
   })
   return Object.entries(map)
     .sort(([a], [b]) => a.localeCompare(b))
     .slice(-14)
-    .map(([day, vals]) => ({ day, ...vals }))
+    .map(([, vals]) => ({ day: vals.label, critical: vals.critical, high: vals.high, medium: vals.medium, low: vals.low }))
 }
 
 export default function DashboardPage() {
+  const { user } = useAuth()
+  const isOfficer = user?.role === 'admin' || user?.role === 'security_officer'
+
   const { data: incidents = [], isLoading: incLoading } = useQuery({
     queryKey: ['incidents-all'],
     queryFn: () => fetchIncidents({ limit: 200 }),
@@ -83,11 +100,14 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   })
 
-  const { data: screenshots = [] } = useQuery({
+  const { data: screenshotsPaged } = useQuery({
     queryKey: ['screenshots-recent'],
-    queryFn: () => fetchScreenshots({ limit: 6 }),
+    queryFn: () => fetchScreenshotsPaged({ limit: 6 }),
+    enabled: isOfficer,
     refetchInterval: 60_000,
   })
+  const screenshots = screenshotsPaged?.items ?? []
+  const totalScreenshots = screenshotsPaged?.total ?? 0
 
   const onlineAgents = agents.filter(a => a.is_online).length
   const openCount = openPaged?.total ?? incidents.filter(i => i.status === 'open').length
@@ -148,7 +168,7 @@ export default function DashboardPage() {
           <Card>
             <Statistic
               title="Скриншотов"
-              value={screenshots.length}
+              value={totalScreenshots}
               prefix={<CameraOutlined style={{ color: '#52c41a' }} />}
             />
           </Card>
@@ -219,11 +239,7 @@ export default function DashboardPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                   {screenshots.slice(0, 6).map(s => (
                     <div key={s.id}>
-                      <Image
-                        src={screenshotUrl(s.id)}
-                        style={{ width: '100%', height: 90, objectFit: 'cover', borderRadius: 4 }}
-                        fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-                      />
+                      <AuthScreenshotThumb id={s.id} />
                       <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
                         {s.hostname} · {dayjs(s.created_at).format('HH:mm')}
                       </div>

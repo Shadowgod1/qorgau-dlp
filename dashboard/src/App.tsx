@@ -30,6 +30,12 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
 }
 
+function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { user } = useAuth()
+  if (!user) return null
+  return roles.includes(user.role) ? <>{children}</> : <Navigate to="/dashboard" replace />
+}
+
 function AppRoutes() {
   const { theme } = useTheme()
 
@@ -64,10 +70,10 @@ function AppRoutes() {
           <Route path="incidents"  element={<IncidentsPage />} />
           <Route path="analytics"  element={<AnalyticsPage />} />
           <Route path="activity"   element={<ActivityPage />} />
-          <Route path="configs"       element={<ConfigsPage />} />
+          <Route path="configs"       element={<RoleGuard roles={['admin']}><ConfigsPage /></RoleGuard>} />
           <Route path="reports"       element={<ReportsPage />} />
-          <Route path="surveillance"  element={<SurveillancePage />} />
-          <Route path="settings"      element={<SettingsPage />} />
+          <Route path="surveillance"  element={<RoleGuard roles={['admin', 'security_officer']}><SurveillancePage /></RoleGuard>} />
+          <Route path="settings"      element={<RoleGuard roles={['admin']}><SettingsPage /></RoleGuard>} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

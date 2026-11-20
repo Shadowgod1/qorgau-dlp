@@ -1,85 +1,52 @@
-# 🛡️ QORGAU DLP — Инструкция для агента
-
-> Прочитай этот файл ПЕРВЫМ при работе с проектом.
+# 🛡️ QORGAU DLP v2.0 (Rust)
 
 ## Что это за проект
 
-**QORGAU DLP** — корпоративная система предотвращения утечек данных (Data Loss Prevention) для казахстанских организаций. Система мониторит рабочие компьютеры сотрудников, обнаруживает утечки конфиденциальных данных и оповещает офицера безопасности.
+**QORGAU DLP** — корпоративная система предотвращения утечек данных (Data Loss Prevention) и контроля активности сотрудников для казахстанских организаций, переписанная на **Rust** для минимального потребления CPU и RAM.
 
 ## Архитектура
 
-Проект состоит из **3 компонентов** + **инфраструктура**:
-
 ```
 qorgau_dlp/
-├── agent/         → Python-агент для Windows ПК
-├── server/        → FastAPI REST-сервер
-├── dashboard/     → React + TypeScript дашборд
-├── docs/          → Документация (этот vault)
-├── docker-compose.yml
+├── Cargo.toml                 → Rust Cargo Workspace (opt-level="z", LTO, strip)
+├── crates/
+│   ├── qorgau-common/         → Протокол, валидация agent_id, DLP-детекторы РК (ИИН/БИН mod-11, Luhn, IBAN mod-97, CEF, маскирование)
+│   ├── qorgau-server/         → Единый бинарник Axum + Tokio + SQLx (PostgreSQL 16) + встроенные воркеры (OCR, алерты, retention)
+│   └── qorgau-agent/          → Нативный Windows x64 агент (~5-10 МБ, event-driven Win32, 11 каналов, дисковая WAL-очередь)
+├── dashboard/                 → React 18 + TypeScript + Ant Design 5 дашборд
+├── legacy/                    → Исходная Python-версия (архив)
+├── Dockerfile                 → Multi-stage сборка qorgau-server + Tesseract OCR (rus/kaz/eng)
+├── Dockerfile.nginx           → Multi-stage сборка dashboard + Nginx (REST + WSS Upgrade)
+├── docker-compose.yml         → Лёгкий 3-контейнерный стек (PostgreSQL, Rust server, Nginx)
 ├── nginx.conf
-└── .env
+└── .env.example
 ```
 
 ## Быстрый старт
 
-### 1. Сервер + БД (Docker)
+### 1. Сервер + Дашборд + БД (Docker Compose)
 ```bash
-cp .env.example .env      # настроить переменные
-docker-compose up -d       # поднять PostgreSQL, Redis, API, Celery, Nginx, Grafana
+cp .env.example .env           # задать пароли и SECRET_KEY
+docker compose up -d --build   # → http://localhost
 ```
 
-### 2. Дашборд (dev-сервер)
-```bash
-cd dashboard
-npm install
-npm run dev                # → http://localhost:5173
+### 2. Локальная сборка и тесты (Rust)
+```powershell
+cargo test --workspace
+cargo build --release -p qorgau-agent
+# Готовый агент: target/release/qorgau-agent.exe
 ```
 
-### 3. Агент (Windows)
-```bash
-cd agent
-pip install -r requirements.txt
-python agent.py            # запуск в dev-режиме
-# или собрать .exe:
-python -m PyInstaller QorgauAgent.spec
+### 3. Запуск агента на Windows
+Создайте `config.toml` рядом с `qorgau-agent.exe` (или задайте переменные `QORGAU_SERVER_URL`, `QORGAU_AGENT_TOKEN`):
+```toml
+server_url = "http://localhost"
+agent_token = "your_agent_token"
 ```
 
-## Связанные документы
-
-| Документ | Описание |
-|----------|----------|
-| [architecture.md](architecture.md) | Архитектура системы, потоки данных, диаграммы |
-| [agent.md](agent.md) | Подробно о Python-агенте (коллекторы, DLP, сборка) |
-| [server.md](server.md) | FastAPI-сервер: модели, API, Policy Engine |
-| [dashboard.md](dashboard.md) | React-дашборд: страницы, компоненты, роутинг |
-| [api-reference.md](api-reference.md) | Справочник всех API endpoints |
-| [deployment.md](deployment.md) | Docker, .env, production, SSL, hardening |
-| [testing.md](testing.md) | Тесты: как запускать, что проверяется |
-
-## Ключевые концепции
-
-- **Policy Engine** — ядро DLP. regex-паттерны в БД, кэш 60 сек
-- **Коллекторы** — daemon-потоки в агенте, каждый мониторит свой канал
-- **Sender** — HTTP-клиент с очередью и batch-отправкой
-- **RBAC** — 3 роли: admin, security_officer, viewer
-- **Казахстанская специфика** — ИИН/БИН, IBAN KZ, грифы секретности, Syslog CEF для ОЦИБ
-
-## Правила разработки
-
-1. **Не удаляй существующие комментарии** — они содержат юридические ссылки (ТК РК, GDPR)
-2. **Агент работает ТОЛЬКО на Windows** (ctypes, winreg, win32gui)
-3. **Модули микрофона/камеры выключены по умолчанию** — это чувствительные функции
-4. **Все изменения политик** должны проходить через `invalidate_cache()` в Policy Engine
-5. **JWT токены** — 8 часов, хранятся в `localStorage` под ключом `qorgau_token`
-6. **Серверный config** — `server/app/config.py` (pydantic-settings), агентский — `agent/config.py`
-
-## Стек технологий
-
-| Слой | Технология |
-|------|-----------|
-| Агент | Python 3.11+, pywin32, mss, sounddevice, opencv |
-| Сервер | FastAPI, SQLAlchemy (async), Celery, Redis |
-| БД | PostgreSQL 16 |
-| Дашборд | React 18, TypeScript, Ant Design 5, Recharts, Vite |
-| Инфраструктура | Docker Compose, Nginx, Grafana |
+## Ключевые принципы безопасности
+1. **Fail-closed по умолчанию:** модули `mod_microphone` и `mod_webcam` всегда выключены при недоступности сервера (ТК РК ст. 23).
+2. **Авторизованные WebSockets:** `/ws/dashboard` (JWT) и `/ws/agent` (`X-Agent-Token` + адресная доставка команд по `agent_id`).
+3. **Защита от Path Traversal:** строгая валидация `agent_id` (`^[a-zA-Z0-9_-]{8,64}$`) + проверка канонических путей.
+4. **RBAC + Маскирование ПДн:** роли `admin`, `security_officer`, `viewer`; для `viewer` маскируются `snippet` и `meta`, скрыты сырые мессенджеры/медиа.
+5. **Hash-Chain Аудит (Приказ №410):** криптографическая цепочка SHA-256 с транзакционной блокировкой PostgreSQL (`pg_advisory_xact_lock`).

@@ -4,18 +4,19 @@ import {
   Space, Table, Tabs, Tag, Tooltip, Typography, Empty,
 } from 'antd'
 import {
-  AudioOutlined, CameraOutlined, DeleteOutlined,
+  AudioOutlined, CameraOutlined, DeleteOutlined, DownloadOutlined,
   PlayCircleOutlined, PauseCircleOutlined, SoundOutlined,
   ReloadOutlined, VideoCameraOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   fetchAgents, fetchAudioRecordings, fetchWebcamPhotos,
-  audioDownloadUrl, webcamPhotoUrl, deleteAudioRecording,
-  deleteWebcamPhoto, sendAgentCommand,
+  audioDownloadPath, downloadAudioRecording, webcamPhotoPath,
+  deleteAudioRecording, deleteWebcamPhoto, sendAgentCommand,
 } from '../api/client'
 import type { AudioRecording, WebcamPhotoItem } from '../api/client'
 import type { Agent } from '../api/types'
+import { useAuthMediaUrl } from '../hooks/useAuthMedia'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
@@ -32,20 +33,52 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-// ── Аудиозаписи ─────────────────────────────────────────────────────────────
+function AuthWebcamImage({ id }: { id: number }) {
+  const src = useAuthMediaUrl(webcamPhotoPath(id))
+  if (!src) {
+    return <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.4 }}>Загрузка...</div>
+  }
+  return <Image src={src} alt={`webcam-${id}`} style={{ objectFit: 'cover', height: 140, width: '100%' }} />
+}
+
+function InlineAudioPlayer({ recording }: { recording: AudioRecording | null }) {
+  const src = useAuthMediaUrl(recording ? audioDownloadPath(recording.id) : null)
+  if (!recording) {
+    return (
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        <SoundOutlined /> Нажмите «▶» для прослушивания аудиозаписи во встроенном плеере. Записи хранятся 30 дней.
+      </Text>
+    )
+  }
+  return (
+    <Space wrap align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
+      <Text strong style={{ fontSize: 13 }}>
+        🎙️ {recording.hostname} ({recording.username}) — {formatDuration(recording.duration_sec)}
+      </Text>
+      {src ? (
+        <audio controls autoPlay src={src} style={{ height: 34 }} />
+      ) : (
+        <Text type="secondary">Загрузка аудио...</Text>
+      )}
+    </Space>
+  )
+}
+
 function AudioTab() {
   const qc = useQueryClient()
   const [agentFilter, setAgentFilter] = useState<string | undefined>()
+  const [playing, setPlaying] = useState<AudioRecording | null>(null)
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const { data, isLoading } = useQuery({
     queryKey: ['audio', agentFilter],
-    queryFn: () => fetchAudioRecordings(agentFilter ? { agent_id: agentFilter } : {}),
+    queryFn: () => fetchAudioRecordings(agentFilter ? { agent_id: agentFilter, limit: 100 } : { limit: 100 }),
   })
 
   const del = useMutation({
     mutationFn: deleteAudioRecording,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['audio'] }); message.success('Запись удалена') },
+    onError: () => message.error('Ошибка удаления записи'),
   })
 
   const recordCmd = useMutation({
@@ -89,13 +122,14 @@ function AudioTab() {
     {
       title: '',
       key: 'actions',
-      width: 120,
+      width: 140,
       render: (_: unknown, r: AudioRecording) => (
         <Space>
-          <Tooltip title="Прослушать / скачать">
-            <a href={audioDownloadUrl(r.id)} target="_blank" rel="noreferrer">
-              <Button size="small" icon={<PlayCircleOutlined />} />
-            </a>
+          <Tooltip title="Воспроизвести">
+            <Button size="small" type={playing?.id === r.id ? 'primary' : 'default'} icon={<PlayCircleOutlined />} onClick={() => setPlaying(r)} />
+          </Tooltip>
+          <Tooltip title="Скачать WAV">
+            <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadAudioRecording(r.id).catch(() => message.error('Ошибка скачивания'))} />
           </Tooltip>
           <Popconfirm title="Удалить запись?" onConfirm={() => del.mutate(r.id)}
             okText="Удалить" cancelText="Отмена" okButtonProps={{ danger: true }}>
@@ -108,15 +142,15 @@ function AudioTab() {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <Select
-          allowClear placeholder="Фильтр по агенту" style={{ width: 280 }}
+          allowClear placeholder="Фильтр по агенту" style={{ width: 260 }}
           value={agentFilter} onChange={setAgentFilter}
           options={agents.map((a: Agent) => ({ value: a.agent_id, label: `${a.hostname} (${a.username})` }))}
         />
         <Select
           placeholder="Записать аудио на агенте"
-          style={{ width: 280 }}
+          style={{ width: 260 }}
           onSelect={(v: string | undefined) => { if (v) recordCmd.mutate(v) }}
           options={agents.filter((a: Agent) => a.is_online).map((a: Agent) => ({
             value: a.agent_id, label: `🎙️ ${a.hostname}`,
@@ -128,12 +162,8 @@ function AudioTab() {
         </Button>
       </div>
 
-      {/* Встроенный аудиоплеер */}
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          <SoundOutlined /> Нажмите «▶» для скачивания и прослушивания аудиозаписи.
-          Записи хранятся {30} дней.
-        </Text>
+        <InlineAudioPlayer recording={playing} />
       </Card>
 
       <Table
@@ -147,7 +177,6 @@ function AudioTab() {
   )
 }
 
-// ── Фото с веб-камеры ───────────────────────────────────────────────────────
 function WebcamTab() {
   const qc = useQueryClient()
   const [agentFilter, setAgentFilter] = useState<string | undefined>()
@@ -155,12 +184,13 @@ function WebcamTab() {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const { data, isLoading } = useQuery({
     queryKey: ['webcam', agentFilter],
-    queryFn: () => fetchWebcamPhotos(agentFilter ? { agent_id: agentFilter } : {}),
+    queryFn: () => fetchWebcamPhotos(agentFilter ? { agent_id: agentFilter, limit: 60 } : { limit: 60 }),
   })
 
   const del = useMutation({
     mutationFn: deleteWebcamPhoto,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['webcam'] }); message.success('Фото удалено') },
+    onError: () => message.error('Ошибка удаления фото'),
   })
 
   const takePhoto = useMutation({
@@ -173,15 +203,15 @@ function WebcamTab() {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <Select
-          allowClear placeholder="Фильтр по агенту" style={{ width: 280 }}
+          allowClear placeholder="Фильтр по агенту" style={{ width: 260 }}
           value={agentFilter} onChange={setAgentFilter}
           options={agents.map((a: Agent) => ({ value: a.agent_id, label: `${a.hostname} (${a.username})` }))}
         />
         <Select
           placeholder="📷 Сделать фото на агенте"
-          style={{ width: 280 }}
+          style={{ width: 260 }}
           onSelect={(v: string | undefined) => { if (v) takePhoto.mutate(v) }}
           options={agents.filter((a: Agent) => a.is_online).map((a: Agent) => ({
             value: a.agent_id, label: `📷 ${a.hostname}`,
@@ -198,53 +228,43 @@ function WebcamTab() {
       ) : photos.length === 0 ? (
         <Empty description="Нет фотографий с камеры" />
       ) : (
-        <Image.PreviewGroup>
-          <Row gutter={[12, 12]}>
-            {photos.map((p: WebcamPhotoItem) => (
-              <Col key={p.id} xs={12} sm={8} md={6} lg={4}>
-                <Card
-                  size="small"
-                  hoverable
-                  cover={
-                    <Image
-                      src={webcamPhotoUrl(p.id)}
-                      alt={`webcam-${p.id}`}
-                      style={{ objectFit: 'cover', height: 140 }}
-                      placeholder={<div style={{ height: 140, background: '#1a1a2e' }} />}
-                    />
+        <Row gutter={[12, 12]}>
+          {photos.map((p: WebcamPhotoItem) => (
+            <Col key={p.id} xs={12} sm={8} md={6} lg={4}>
+              <Card
+                size="small"
+                hoverable
+                cover={<AuthWebcamImage id={p.id} />}
+                actions={[
+                  <Popconfirm
+                    key="del"
+                    title="Удалить?"
+                    onConfirm={() => del.mutate(p.id)}
+                    okText="Да" cancelText="Нет"
+                  >
+                    <DeleteOutlined />
+                  </Popconfirm>,
+                ]}
+              >
+                <Card.Meta
+                  title={<Text style={{ fontSize: 12 }}>{p.hostname}</Text>}
+                  description={
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {p.username} • {p.created_at ? dayjs(p.created_at).format('DD.MM HH:mm') : '—'}
+                      <br />
+                      {formatSize(p.file_size)}
+                    </Text>
                   }
-                  actions={[
-                    <Popconfirm
-                      key="del"
-                      title="Удалить?"
-                      onConfirm={() => del.mutate(p.id)}
-                      okText="Да" cancelText="Нет"
-                    >
-                      <DeleteOutlined />
-                    </Popconfirm>,
-                  ]}
-                >
-                  <Card.Meta
-                    title={<Text style={{ fontSize: 12 }}>{p.hostname}</Text>}
-                    description={
-                      <Text type="secondary" style={{ fontSize: 11 }}>
-                        {p.username} • {p.created_at ? dayjs(p.created_at).format('DD.MM HH:mm') : '—'}
-                        <br />
-                        {formatSize(p.file_size)}
-                      </Text>
-                    }
-                  />
-                </Card>
-              </Col>
-            ))}
-          </Row>
-        </Image.PreviewGroup>
+                />
+              </Card>
+            </Col>
+          ))}
+        </Row>
       )}
     </>
   )
 }
 
-// ── Управление (команды) ────────────────────────────────────────────────────
 function CommandsTab() {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const onlineAgents = agents.filter((a: Agent) => a.is_online)
@@ -343,31 +363,20 @@ function CommandsTab() {
     },
   ]
 
-  return (
-    <>
-      {onlineAgents.length === 0 ? (
-        <Empty description="Нет онлайн агентов" />
-      ) : (
-        <Table
-          columns={columns}
-          dataSource={onlineAgents}
-          rowKey="agent_id"
-          pagination={false}
-        />
-      )}
-    </>
+  return onlineAgents.length === 0 ? (
+    <Empty description="Нет онлайн агентов" />
+  ) : (
+    <Table columns={columns} dataSource={onlineAgents} rowKey="agent_id" pagination={false} />
   )
 }
 
-
-// ── Главная страница ─────────────────────────────────────────────────────────
 export default function SurveillancePage() {
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
         <Title level={4} style={{ margin: 0 }}>Наблюдение</Title>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          Управление камерой, микрофоном и просмотр записей
+          Управление камерой, микрофоном и просмотр записей (защищено RBAC)
         </Text>
       </div>
 
@@ -375,27 +384,9 @@ export default function SurveillancePage() {
         <Tabs
           defaultActiveKey="commands"
           items={[
-            {
-              key: 'commands',
-              label: (
-                <span><CameraOutlined /> Управление</span>
-              ),
-              children: <CommandsTab />,
-            },
-            {
-              key: 'audio',
-              label: (
-                <span><AudioOutlined /> Аудиозаписи</span>
-              ),
-              children: <AudioTab />,
-            },
-            {
-              key: 'webcam',
-              label: (
-                <span><VideoCameraOutlined /> Фото с камеры</span>
-              ),
-              children: <WebcamTab />,
-            },
+            { key: 'commands', label: <span><CameraOutlined /> Управление</span>, children: <CommandsTab /> },
+            { key: 'audio', label: <span><AudioOutlined /> Аудиозаписи</span>, children: <AudioTab /> },
+            { key: 'webcam', label: <span><VideoCameraOutlined /> Фото с камеры</span>, children: <WebcamTab /> },
           ]}
         />
       </Card>

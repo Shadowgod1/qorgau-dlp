@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Button, Card, Col, Divider, Form, Input, InputNumber, Modal,
   Row, Space, Switch, Table, Tag, Tooltip, Typography, Popconfirm, Select, message,
@@ -70,10 +70,12 @@ function TogglesSection({ title, toggles }: {
     <>
       <Divider orientation="left" style={{ fontSize: 12, margin: '12px 0 8px' }}>{title}</Divider>
       {toggles.map(t => (
-        <Form.Item key={String(t.key)} name={t.key} valuePropName="checked" style={{ marginBottom: 6 }}>
-          <Switch size="small" checkedChildren="ON" unCheckedChildren="OFF" />
-          <Text style={{ marginLeft: 8, fontSize: 13 }}>{t.label}</Text>
-        </Form.Item>
+        <div key={String(t.key)} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <Form.Item name={t.key} valuePropName="checked" noStyle>
+            <Switch size="small" checkedChildren="ON" unCheckedChildren="OFF" />
+          </Form.Item>
+          <Text style={{ fontSize: 13 }}>{t.label}</Text>
+        </div>
       ))}
     </>
   )
@@ -89,6 +91,13 @@ function ConfigModal({
   const [form] = Form.useForm()
   const qc = useQueryClient()
   const isEdit = !!initial?.id
+
+  useEffect(() => {
+    if (open) {
+      form.resetFields()
+      form.setFieldsValue(initial ? { ...DEFAULT_VALUES, ...initial } : DEFAULT_VALUES)
+    }
+  }, [open, initial, form])
 
   const save = useMutation({
     mutationFn: (vals: Partial<AgentConfig>) =>
@@ -197,9 +206,13 @@ function AssignModal({
   agents: Agent[]
 }) {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<string[]>(
-    config?.agents?.map(a => a.agent_id) ?? []
-  )
+  const [selected, setSelected] = useState<string[]>([])
+
+  useEffect(() => {
+    if (config) {
+      setSelected(config.agents?.map(a => a.agent_id) ?? [])
+    }
+  }, [config])
 
   const assign = useMutation({
     mutationFn: async () => {
