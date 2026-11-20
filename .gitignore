@@ -1,0 +1,36 @@
+# Environment & Secrets
+.env
+*.local
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+
+# Node / Dashboard
+node_modules/
+dashboard/dist/
+dashboard/vite.log
+*.log
+
+# Python / Legacy
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+legacy/agent/build/
+legacy/agent/dist/
+legacy/server/logs/
+legacy/server/screenshots/
+
+# Runtime storage & local DBs
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
