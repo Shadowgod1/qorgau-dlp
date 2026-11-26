@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         login_limiter: LoginRateLimiter::default(),
         alert_tx,
         ocr_tx,
+        live_frames: dashmap::DashMap::new(),
     });
 
     spawn_background_workers(state.clone(), alert_rx, ocr_rx);

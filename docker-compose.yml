@@ -38,6 +38,7 @@ services:
       - shadow:/app/shadow
       - audio:/app/audio
       - webcam_photos:/app/webcam_photos
+      - ./downloads:/app/downloads:ro
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
       interval: 10s

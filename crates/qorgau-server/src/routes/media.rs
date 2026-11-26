@@ -20,10 +20,12 @@ use crate::storage::verify_path_within;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        // Screenshots
+        // Screenshots & Quadrator Live Wall
         .route("/screenshots", get(list_screenshots))
         .route("/screenshots/latest", get(latest_screenshots))
         .route("/screenshots/trigger", post(trigger_screenshot))
+        .route("/screenshots/live-trigger", post(trigger_live_frames))
+        .route("/screenshots/live/{agent_id}", get(get_live_frame))
         .route("/screenshots/{id}/image", get(get_screenshot_image))
         .route("/screenshots/{id}", delete(delete_screenshot))
         // Shadow copies
@@ -223,18 +225,85 @@ async fn get_screenshot_image(
     stream_file(&safe, "image/jpeg", None).await
 }
 
+#[derive(Deserialize)]
+struct LiveTriggerReq {
+    agent_ids: Vec<String>,
+}
+
+/// Triggers lightweight in-memory screen frames for Quadrator (2x2 / 3x3 / 4x4 live wall).
+async fn trigger_live_frames(
+    OfficerUser(_): OfficerUser,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<LiveTriggerReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    let mut delivered = 0usize;
+    for aid in body.agent_ids.iter().take(16) {
+        if state.ws.send_to_agent(aid, WsAgentCommand::TakeLiveFrame) {
+            delivered += 1;
+        }
+    }
+    Ok(Json(json!({ "status": "ok", "delivered": delivered })))
+}
+
+async fn get_live_frame(
+    OfficerUser(_): OfficerUser,
+    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<String>,
+) -> AppResult<Response> {
+    let Some(entry) = state.live_frames.get(&agent_id) else {
+        return Err(AppError::NotFound("No live frame yet".to_string()));
+    };
+    let (ts, bytes) = entry.value().clone();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Frame-Timestamp", ts.to_rfc3339())
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+async fn is_protected_by_legal_hold(
+    db: &sqlx::PgPool,
+    agent_id: &str,
+    ts: DateTime<Utc>,
+) -> AppResult<bool> {
+    let found: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM incidents \
+         WHERE legal_hold = TRUE AND agent_id = $1 \
+           AND $2 BETWEEN created_at - INTERVAL '15 minutes' AND created_at + INTERVAL '15 minutes' \
+         LIMIT 1",
+    )
+    .bind(agent_id)
+    .bind(ts)
+    .fetch_optional(db)
+    .await?;
+    Ok(found.is_some())
+}
+
 async fn delete_screenshot(
     OfficerUser(user): OfficerUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("DELETE FROM screenshots WHERE id = $1 RETURNING file_path, agent_id")
+    let meta: Option<(String, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT file_path, agent_id, created_at FROM screenshots WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
             .await?;
-    let (file_path, agent_id) =
-        row.ok_or_else(|| AppError::NotFound("Screenshot not found".to_string()))?;
+    let (file_path, agent_id, created_at) =
+        meta.ok_or_else(|| AppError::NotFound("Screenshot not found".to_string()))?;
+
+    if is_protected_by_legal_hold(&state.db, &agent_id, created_at).await? {
+        return Err(AppError::Conflict(
+            "Screenshot is protected by an active incident Legal Hold".to_string(),
+        ));
+    }
+
+    sqlx::query("DELETE FROM screenshots WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     if let Ok(safe) = verify_path_within(&state.config.screenshots_dir, &file_path).await {
         let _ = tokio::fs::remove_file(safe).await;
     }
@@ -396,13 +465,22 @@ async fn delete_audio(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("DELETE FROM audio_recordings WHERE id = $1 RETURNING file_path, agent_id")
+    let meta: Option<(String, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT file_path, agent_id, created_at FROM audio_recordings WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
             .await?;
-    let (file_path, agent_id) =
-        row.ok_or_else(|| AppError::NotFound("Audio recording not found".to_string()))?;
+    let (file_path, agent_id, created_at) =
+        meta.ok_or_else(|| AppError::NotFound("Audio recording not found".to_string()))?;
+    if is_protected_by_legal_hold(&state.db, &agent_id, created_at).await? {
+        return Err(AppError::Conflict(
+            "Audio recording is protected by an active incident Legal Hold".to_string(),
+        ));
+    }
+    sqlx::query("DELETE FROM audio_recordings WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     if let Ok(safe) = verify_path_within(&state.config.audio_dir, &file_path).await {
         let _ = tokio::fs::remove_file(safe).await;
     }
@@ -499,13 +577,22 @@ async fn delete_webcam(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("DELETE FROM webcam_photos WHERE id = $1 RETURNING file_path, agent_id")
+    let meta: Option<(String, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT file_path, agent_id, created_at FROM webcam_photos WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
             .await?;
-    let (file_path, agent_id) =
-        row.ok_or_else(|| AppError::NotFound("Webcam photo not found".to_string()))?;
+    let (file_path, agent_id, created_at) =
+        meta.ok_or_else(|| AppError::NotFound("Webcam photo not found".to_string()))?;
+    if is_protected_by_legal_hold(&state.db, &agent_id, created_at).await? {
+        return Err(AppError::Conflict(
+            "Webcam photo is protected by an active incident Legal Hold".to_string(),
+        ));
+    }
+    sqlx::query("DELETE FROM webcam_photos WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     if let Ok(safe) = verify_path_within(&state.config.webcam_dir, &file_path).await {
         let _ = tokio::fs::remove_file(safe).await;
     }

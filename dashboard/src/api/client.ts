@@ -44,8 +44,68 @@ export const fetchIncidentStats = () =>
 export const fetchIncidentById = (id: number) =>
   http.get<Incident>(`/incidents/${id}`).then(r => r.data)
 
-export const patchIncident = (id: number, status: string) =>
-  http.patch(`/incidents/${id}`, { status })
+export const createManualIncident = (data: {
+  username: string
+  channel: string
+  severity: string
+  snippet: string
+  hostname?: string
+  agent_id?: string
+  group_tag?: string
+  assigned_to?: string
+  legal_hold?: boolean
+}) => http.post<Incident>('/incidents', data).then(r => r.data)
+
+export const patchIncident = (
+  id: number,
+  statusOrBody: string | {
+    status?: string
+    legal_hold?: boolean
+    assigned_to?: string
+    group_tag?: string
+    resolution_note?: string
+  },
+) =>
+  http.patch<Incident>(
+    `/incidents/${id}`,
+    typeof statusOrBody === 'string' ? { status: statusOrBody } : statusOrBody,
+  ).then(r => r.data)
+
+export interface IncidentComment {
+  id: number
+  incident_id: number
+  author: string
+  author_role: string
+  body: string
+  created_at: string
+}
+
+export const fetchIncidentComments = (id: number) =>
+  http.get<IncidentComment[]>(`/incidents/${id}/comments`).then(r => r.data)
+
+export const addIncidentComment = (id: number, body: string) =>
+  http.post<IncidentComment>(`/incidents/${id}/comments`, { body }).then(r => r.data)
+
+export interface IncidentEvidence {
+  incident_id: number
+  shadow_copies: {
+    id: number
+    file_name: string
+    original_path: string
+    sha256: string
+    size_bytes: number
+    created_at: string
+  }[]
+  screenshots: {
+    id: number
+    hostname: string
+    file_size: number
+    created_at: string
+  }[]
+}
+
+export const fetchIncidentEvidence = (id: number) =>
+  http.get<IncidentEvidence>(`/incidents/${id}/evidence`).then(r => r.data)
 
 // ── Timeline ─────────────────────────────────────────────────────────────────
 // GET /events/timeline → { items, total }
@@ -127,6 +187,10 @@ export interface AgentConfig {
   webcam_interval: number
   webcam_quality: number
   webcam_max_w: number
+  mod_watermark: boolean
+  watermark_opacity: number
+  watermark_text: string
+  watermark_apps: string
   net_alert_sensitive_ports: boolean
   net_alert_unknown_ext: boolean
   net_block_tor: boolean
@@ -138,6 +202,13 @@ export interface AgentConfig {
   usb_alert_on_connect: boolean
   usb_analyze_content: boolean
   usb_alert_executables: boolean
+  usb_whitelist_mode: boolean
+  mod_file_monitor: boolean
+  mod_discovery: boolean
+  discovery_paths: string
+  mod_inventory: boolean
+  mod_app_blocker: boolean
+  mod_web_blocker: boolean
   created_by: string | null
   created_at: string | null
   updated_at: string | null
@@ -318,3 +389,209 @@ export const deleteWebcamPhoto = (id: number) =>
 
 export const sendAgentCommand = (agentId: string, command: string) =>
   http.post('/webcam/command', { agent_id: agentId, command })
+
+// ── Quadrator (Live Wall) ────────────────────────────────────────────────────
+export const triggerLiveFrames = (agentIds: string[]) =>
+  http.post('/screenshots/live-trigger', { agent_ids: agentIds }).then(r => r.data)
+
+export const liveFramePath = (agentId: string) => `/screenshots/live/${encodeURIComponent(agentId)}`
+
+// ── Employees & Risk Threshold ───────────────────────────────────────────────
+export interface EmployeeSummary {
+  username: string
+  hostnames: string[]
+  is_online: boolean
+  last_seen: string | null
+  total_incidents: number
+  critical_incidents: number
+  open_incidents: number
+  risk_score: number
+  active_sec: number
+  productivity_pct: number
+}
+
+export interface EmployeeProfile {
+  username: string
+  period_days: number
+  risk_score: number
+  risk_breakdown: { critical: number; high: number; medium: number; low: number }
+  agents: { agent_id: string; hostname: string; ip_address: string; is_online: boolean; last_seen: string | null }[]
+  incidents: Incident[]
+  top_apps: { app_name: string; total_sec: number; productivity: string }[]
+  top_sites: { domain: string; category: string; visits: number; blocked: number }[]
+  recent_usb: { id: number; device_name: string; action: string; file_path: string | null; created_at: string }[]
+  worktime: WorktimeRow[]
+}
+
+export interface RiskThresholdSettings {
+  risk_threshold: number
+  notify_on_risk_growth: boolean
+  updated_by: string | null
+  updated_at: string | null
+}
+
+export const fetchEmployees = (days = 30) =>
+  http.get<EmployeeSummary[]>('/users', { params: { days } }).then(r => r.data)
+
+export const fetchEmployeeProfile = (username: string, days = 30) =>
+  http.get<EmployeeProfile>(`/users/${encodeURIComponent(username)}/profile`, { params: { days } }).then(r => r.data)
+
+export const fetchRiskThreshold = () =>
+  http.get<RiskThresholdSettings>('/settings/risk-threshold').then(r => r.data)
+
+export const updateRiskThreshold = (data: { risk_threshold: number; notify_on_risk_growth: boolean }) =>
+  http.put<RiskThresholdSettings>('/settings/risk-threshold', data).then(r => r.data)
+
+// ── Audit Log & Hash-Chain Verification ──────────────────────────────────────
+export interface AuditEntry {
+  id: number
+  ts: string
+  actor: string
+  actor_role: string
+  action: string
+  resource: string
+  details: Record<string, unknown>
+  prev_hash: string
+  entry_hash: string
+}
+
+export interface AuditVerifyResult {
+  valid: boolean
+  total_entries: number
+  broken_at_id: number | null
+  message: string
+}
+
+export const fetchAuditLogs = (params?: Record<string, unknown>) =>
+  http.get<{ total: number; items: AuditEntry[] }>('/audit', { params }).then(r => r.data)
+
+export const verifyAuditChain = () =>
+  http.get<AuditVerifyResult>('/audit/verify').then(r => r.data)
+
+// ── Shadow Copies Archive ────────────────────────────────────────────────────
+export interface ShadowCopyItem {
+  id: number
+  agent_id: string
+  hostname: string
+  username: string
+  channel: string
+  original_path: string
+  file_name: string
+  sha256: string
+  size_bytes: number
+  incident_id: number | null
+  created_at: string
+}
+
+export const fetchShadowCopies = (params?: Record<string, unknown>) =>
+  http.get<ShadowCopyItem[]>('/shadow', { params }).then(r => r.data)
+
+export const downloadShadowCopy = (id: number, fileName: string) =>
+  downloadFile(`/shadow/${id}/download`, fileName || `shadow_${id}.bin`)
+
+// ── Variant B: USB Devices (ВНИ), Blocked Apps, Discovery, Inventory ─────────
+export interface UsbDevice {
+  id: number
+  serial_number: string
+  vendor_id: string
+  product_id: string
+  label: string
+  status: 'allowed' | 'blocked' | 'readonly'
+  owner: string | null
+  comment: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const fetchUsbDevices = () =>
+  http.get<UsbDevice[]>('/usb-devices').then(r => r.data)
+
+export const saveUsbDevice = (data: Partial<UsbDevice>) =>
+  http.post<UsbDevice>('/usb-devices', data).then(r => r.data)
+
+export const patchUsbDevice = (id: number, data: Partial<UsbDevice>) =>
+  http.patch<UsbDevice>(`/usb-devices/${id}`, data).then(r => r.data)
+
+export const deleteUsbDevice = (id: number) =>
+  http.delete(`/usb-devices/${id}`)
+
+export interface BlockedApp {
+  id: number
+  pattern: string
+  action: 'block' | 'alert'
+  reason: string | null
+  enabled: boolean
+  created_by: string | null
+  created_at: string
+}
+
+export const fetchBlockedApps = () =>
+  http.get<BlockedApp[]>('/rules/apps').then(r => r.data)
+
+export const createBlockedApp = (data: { pattern: string; action: string; reason?: string }) =>
+  http.post<BlockedApp>('/rules/apps', data).then(r => r.data)
+
+export const deleteBlockedApp = (id: number) =>
+  http.delete(`/rules/apps/${id}`)
+
+export interface DiscoveryFinding {
+  id: number
+  agent_id: string
+  hostname: string
+  username: string
+  file_path: string
+  file_size: number
+  sha256: string
+  matched_rules: string[]
+  severity: string
+  snippet: string
+  status: 'open' | 'resolved' | 'ignored'
+  scanned_at: string
+}
+
+export const fetchDiscoveryFindings = (params?: Record<string, unknown>) =>
+  http.get<DiscoveryFinding[]>('/discovery', { params }).then(r => r.data)
+
+export const patchDiscoveryStatus = (id: number, status: string) =>
+  http.patch<DiscoveryFinding>(`/discovery/${id}`, { status }).then(r => r.data)
+
+export const triggerDiscoveryScan = (agentId?: string) =>
+  http.post('/discovery/trigger', { agent_id: agentId ?? null }).then(r => r.data)
+
+export interface AgentInventory {
+  agent_id: string
+  hostname: string
+  username: string
+  cpu_model: string
+  cpu_cores: number
+  ram_total_mb: number
+  disk_total_gb: number
+  disk_free_gb: number
+  os_build: string
+  updated_at: string
+  software_count: number
+}
+
+export interface SoftwareItem {
+  id: number
+  name: string
+  version: string
+  publisher: string
+  install_date: string
+  status: 'installed' | 'removed'
+  first_seen: string
+  last_seen: string
+}
+
+export const fetchInventoryList = () =>
+  http.get<AgentInventory[]>('/inventory').then(r => r.data)
+
+export const fetchAgentInventoryDetail = (agentId: string) =>
+  http.get<{ hardware: AgentInventory | null; software: SoftwareItem[] }>(`/inventory/${encodeURIComponent(agentId)}`).then(r => r.data)
+
+export const triggerInventoryScan = (agentId?: string) =>
+  http.post('/inventory/trigger', { agent_id: agentId ?? null }).then(r => r.data)
+
+export const downloadWindowsAgent = () =>
+  downloadFile('/agent-download/windows', 'qorgau-agent.exe')

@@ -234,6 +234,16 @@ pub struct AgentConfigDto {
     #[serde(default = "default_webcam_max_w")]
     pub webcam_max_w: i32,
 
+    // Screen watermark overlay (anti-photo leak protection, iBatyr 5.6 parity)
+    #[serde(default)]
+    pub mod_watermark: bool,
+    #[serde(default = "default_watermark_opacity")]
+    pub watermark_opacity: i32,
+    #[serde(default = "default_watermark_text")]
+    pub watermark_text: String,
+    #[serde(default)]
+    pub watermark_apps: String,
+
     // Network alerts
     #[serde(default = "default_true")]
     pub net_alert_sensitive_ports: bool,
@@ -254,13 +264,28 @@ pub struct AgentConfigDto {
     #[serde(default)]
     pub web_alert_crypto: bool,
 
-    // USB alerts
+    // USB alerts & Prevention (Variant B — iBatyr DeviceModule / FileModule / Discovery / Inventory)
     #[serde(default = "default_true")]
     pub usb_alert_on_connect: bool,
     #[serde(default = "default_true")]
     pub usb_analyze_content: bool,
     #[serde(default = "default_true")]
     pub usb_alert_executables: bool,
+    #[serde(default)]
+    pub usb_whitelist_mode: bool,
+
+    #[serde(default = "default_true")]
+    pub mod_file_monitor: bool,
+    #[serde(default)]
+    pub mod_discovery: bool,
+    #[serde(default)]
+    pub discovery_paths: String,
+    #[serde(default = "default_true")]
+    pub mod_inventory: bool,
+    #[serde(default)]
+    pub mod_app_blocker: bool,
+    #[serde(default)]
+    pub mod_web_blocker: bool,
 
     #[serde(default)]
     pub created_by: Option<String>,
@@ -306,6 +331,10 @@ impl Default for AgentConfigDto {
             webcam_interval: default_webcam_interval(),
             webcam_quality: default_quality(),
             webcam_max_w: default_webcam_max_w(),
+            mod_watermark: false,
+            watermark_opacity: default_watermark_opacity(),
+            watermark_text: default_watermark_text(),
+            watermark_apps: String::new(),
             net_alert_sensitive_ports: true,
             net_alert_unknown_ext: false,
             net_block_tor: true,
@@ -317,6 +346,13 @@ impl Default for AgentConfigDto {
             usb_alert_on_connect: true,
             usb_analyze_content: true,
             usb_alert_executables: true,
+            usb_whitelist_mode: false,
+            mod_file_monitor: true,
+            mod_discovery: false,
+            discovery_paths: String::new(),
+            mod_inventory: true,
+            mod_app_blocker: false,
+            mod_web_blocker: false,
             created_by: None,
             created_at: None,
             updated_at: None,
@@ -353,12 +389,29 @@ fn default_webcam_interval() -> i32 {
 fn default_webcam_max_w() -> i32 {
     1280
 }
+fn default_watermark_opacity() -> i32 {
+    25
+}
+fn default_watermark_text() -> String {
+    "{username} • {hostname} • {time}".to_string()
+}
+
+/// Active prevention rules synchronized from server to agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreventionRulesDto {
+    pub usb_whitelist_mode: bool,
+    pub allowed_usb_serials: Vec<String>,
+    pub blocked_usb_serials: Vec<String>,
+    pub blocked_apps: Vec<String>,
+    pub blocked_domains: Vec<String>,
+}
 
 /// Commands pushed from server to a targeted agent over `/ws/agent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsAgentCommand {
     TakeScreenshot,
+    TakeLiveFrame,
     TakeWebcam,
     StartWebcamStream,
     StopWebcamStream,
@@ -366,6 +419,9 @@ pub enum WsAgentCommand {
     StartRecording,
     StopRecording,
     ReloadConfig,
+    ReloadPreventionRules,
+    RunDiscoveryScan,
+    RunInventoryScan,
 }
 
 /// Real-time events pushed from server to authenticated operators over `/ws/dashboard`.
@@ -385,6 +441,10 @@ pub enum WsDashboardEvent {
         agent_id: String,
         screenshot_id: i64,
     },
+    LiveFrame {
+        agent_id: String,
+        ts: DateTime<Utc>,
+    },
     Audio {
         agent_id: String,
         recording_id: i64,
@@ -392,6 +452,11 @@ pub enum WsDashboardEvent {
     Webcam {
         agent_id: String,
         photo_id: i64,
+    },
+    RiskAlert {
+        username: String,
+        risk_score: i64,
+        threshold: i32,
     },
 }
 

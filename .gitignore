@@ -29,8 +29,17 @@ legacy/server/screenshots/
 *.sqlite
 *.sqlite3
 
+# ISO Builder cache & output artifacts
+iso/cache/
+iso/payload/
+dist/
+downloads/*.exe
+*.iso
+
 # OS / IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+.taste-skill/
+.agents/

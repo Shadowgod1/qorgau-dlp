@@ -44,6 +44,12 @@ impl WsHub {
         false
     }
 
+    pub fn broadcast_to_all_agents(&self, cmd: WsAgentCommand) {
+        for entry in self.agents.iter() {
+            let _ = entry.value().try_send(cmd.clone());
+        }
+    }
+
     pub fn connected_agent_count(&self) -> usize {
         self.agents.len()
     }
@@ -187,7 +193,9 @@ async fn handle_dashboard_socket(
                                 WsDashboardEvent::Incident { snippet, .. } => {
                                     *snippet = mask_text(snippet);
                                 }
+                                WsDashboardEvent::RiskAlert { .. } => {}
                                 WsDashboardEvent::Screenshot { .. }
+                                | WsDashboardEvent::LiveFrame { .. }
                                 | WsDashboardEvent::Audio { .. }
                                 | WsDashboardEvent::Webcam { .. } => continue,
                             }

@@ -8,8 +8,8 @@ use axum::{Json, Router};
 use chrono::Utc;
 use qorgau_common::dlp::DlpMatch;
 use qorgau_common::{
-    validate_agent_id, AgentConfigDto, EventBatchRequest, EventBatchResponse, RegisterRequest,
-    Severity, WsDashboardEvent,
+    validate_agent_id, AgentConfigDto, EventBatchRequest, EventBatchResponse, PreventionRulesDto,
+    RegisterRequest, Severity, WsDashboardEvent,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -30,8 +30,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/monitor/events", post(receive_events))
         .route("/monitor/heartbeat", post(heartbeat))
         .route("/monitor/config", get(get_agent_config))
+        .route("/monitor/prevention-rules", get(get_prevention_rules))
         .route("/monitor/policy-sync", get(policy_sync))
+        .route("/monitor/discovery", post(receive_discovery))
+        .route("/monitor/inventory", post(receive_inventory))
         .route("/monitor/screenshot", post(upload_screenshot))
+        .route("/monitor/live-frame", post(upload_live_frame))
         .route("/monitor/shadow", post(upload_shadow))
         .route("/monitor/audio", post(upload_audio))
         .route("/monitor/webcam", post(upload_webcam))
@@ -115,6 +119,198 @@ async fn get_agent_config(
 
     let cfg = fetch_effective_config_for_agent(&state.db, &q.agent_id).await?;
     Ok(Json(cfg))
+}
+
+/// Returns active prevention lists (USB whitelist/blocklist, blocked apps, blocked domains) for an agent.
+async fn get_prevention_rules(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<AgentIdQuery>,
+) -> AppResult<Json<PreventionRulesDto>> {
+    verify_agent_token(&state.config.agent_token, &headers)?;
+    validate_agent_id(&q.agent_id).map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let cfg = fetch_effective_config_for_agent(&state.db, &q.agent_id).await?;
+
+    let usb_rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT serial_number, status FROM usb_devices")
+            .fetch_all(&state.db)
+            .await?;
+    let mut allowed_usb_serials = Vec::new();
+    let mut blocked_usb_serials = Vec::new();
+    for (serial, st) in usb_rows {
+        if st == "allowed" {
+            allowed_usb_serials.push(serial);
+        } else if st == "blocked" {
+            blocked_usb_serials.push(serial);
+        }
+    }
+
+    let app_rows: Vec<(String,)> =
+        sqlx::query_as("SELECT pattern FROM blocked_apps WHERE enabled = TRUE AND action = 'block'")
+            .fetch_all(&state.db)
+            .await?;
+    let domain_rows: Vec<(String,)> =
+        sqlx::query_as("SELECT domain FROM blocked_domains WHERE enabled = TRUE")
+            .fetch_all(&state.db)
+            .await?;
+
+    Ok(Json(PreventionRulesDto {
+        usb_whitelist_mode: cfg.usb_whitelist_mode,
+        allowed_usb_serials,
+        blocked_usb_serials,
+        blocked_apps: app_rows.into_iter().map(|r| r.0).collect(),
+        blocked_domains: domain_rows.into_iter().map(|r| r.0).collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct DiscoveryUploadItem {
+    file_path: String,
+    file_size: i64,
+    sha256: String,
+    matched_rules: Vec<String>,
+    severity: String,
+    snippet: String,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryUploadReq {
+    agent_id: String,
+    hostname: String,
+    username: String,
+    findings: Vec<DiscoveryUploadItem>,
+}
+
+async fn receive_discovery(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<DiscoveryUploadReq>,
+) -> AppResult<Json<Value>> {
+    verify_agent_token(&state.config.agent_token, &headers)?;
+    validate_agent_id(&body.agent_id).map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let mut saved = 0usize;
+    for item in body.findings.into_iter().take(500) {
+        let sev = Severity::from_str_loose(&item.severity);
+        let res = sqlx::query(
+            "INSERT INTO discovery_findings (agent_id, hostname, username, file_path, file_size, sha256, matched_rules, severity, snippet, status, scanned_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',NOW()) \
+             ON CONFLICT (agent_id, file_path) DO UPDATE SET \
+                file_size = EXCLUDED.file_size, \
+                sha256 = EXCLUDED.sha256, \
+                matched_rules = EXCLUDED.matched_rules, \
+                severity = EXCLUDED.severity, \
+                snippet = EXCLUDED.snippet, \
+                scanned_at = NOW()",
+        )
+        .bind(&body.agent_id)
+        .bind(&body.hostname)
+        .bind(&body.username)
+        .bind(&item.file_path)
+        .bind(item.file_size)
+        .bind(&item.sha256)
+        .bind(json!(&item.matched_rules))
+        .bind(sev.as_str())
+        .bind(item.snippet.chars().take(400).collect::<String>())
+        .execute(&state.db)
+        .await;
+        if res.is_ok() {
+            saved += 1;
+        }
+    }
+    Ok(Json(json!({ "status": "ok", "saved": saved })))
+}
+
+#[derive(Deserialize)]
+struct SoftwareUploadItem {
+    name: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    publisher: String,
+    #[serde(default)]
+    install_date: String,
+}
+
+#[derive(Deserialize)]
+struct InventoryUploadReq {
+    agent_id: String,
+    hostname: String,
+    username: String,
+    cpu_model: String,
+    cpu_cores: i32,
+    ram_total_mb: i64,
+    disk_total_gb: f64,
+    disk_free_gb: f64,
+    os_build: String,
+    software: Vec<SoftwareUploadItem>,
+}
+
+async fn receive_inventory(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<InventoryUploadReq>,
+) -> AppResult<Json<Value>> {
+    verify_agent_token(&state.config.agent_token, &headers)?;
+    validate_agent_id(&body.agent_id).map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    sqlx::query(
+        "INSERT INTO agent_inventory (agent_id, hostname, username, cpu_model, cpu_cores, ram_total_mb, disk_total_gb, disk_free_gb, os_build, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW()) \
+         ON CONFLICT (agent_id) DO UPDATE SET \
+            hostname=EXCLUDED.hostname, username=EXCLUDED.username, cpu_model=EXCLUDED.cpu_model, \
+            cpu_cores=EXCLUDED.cpu_cores, ram_total_mb=EXCLUDED.ram_total_mb, \
+            disk_total_gb=EXCLUDED.disk_total_gb, disk_free_gb=EXCLUDED.disk_free_gb, \
+            os_build=EXCLUDED.os_build, updated_at=NOW()",
+    )
+    .bind(&body.agent_id)
+    .bind(&body.hostname)
+    .bind(&body.username)
+    .bind(&body.cpu_model)
+    .bind(body.cpu_cores)
+    .bind(body.ram_total_mb)
+    .bind(body.disk_total_gb)
+    .bind(body.disk_free_gb)
+    .bind(&body.os_build)
+    .execute(&state.db)
+    .await?;
+
+    let mut current_names: Vec<String> = Vec::with_capacity(body.software.len());
+    for sw in body.software.into_iter().take(1000) {
+        let name = sw.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        current_names.push(name.to_string());
+        let _ = sqlx::query(
+            "INSERT INTO installed_software (agent_id, name, version, publisher, install_date, status, first_seen, last_seen) \
+             VALUES ($1,$2,$3,$4,$5,'installed',NOW(),NOW()) \
+             ON CONFLICT (agent_id, name) DO UPDATE SET \
+                version=EXCLUDED.version, publisher=EXCLUDED.publisher, \
+                install_date=EXCLUDED.install_date, status='installed', last_seen=NOW()",
+        )
+        .bind(&body.agent_id)
+        .bind(name)
+        .bind(sw.version.trim())
+        .bind(sw.publisher.trim())
+        .bind(sw.install_date.trim())
+        .execute(&state.db)
+        .await;
+    }
+
+    if !current_names.is_empty() {
+        let _ = sqlx::query(
+            "UPDATE installed_software SET status = 'removed' \
+             WHERE agent_id = $1 AND status = 'installed' AND NOT (name = ANY($2))",
+        )
+        .bind(&body.agent_id)
+        .bind(&current_names)
+        .execute(&state.db)
+        .await;
+    }
+
+    Ok(Json(json!({ "status": "ok", "software_count": current_names.len() })))
 }
 
 async fn policy_sync(
@@ -537,13 +733,81 @@ async fn receive_events(
                 .await;
 
                 let matches = state.policy.evaluate("print", &doc);
-                if !matches.is_empty() {
-                    if create_incident(&state, &batch, "print", &matches, &doc, d.clone())
+                if !matches.is_empty()
+                    && create_incident(&state, &batch, "print", &matches, &doc, d.clone())
+                        .await
+                        .is_some()
+                {
+                    incidents_created += 1;
+                }
+            }
+            "file" => {
+                let fpath = jstr(d, "file_path");
+                let content_snippet = jstr(d, "content_snippet");
+                let combined = format!("{fpath}\n{content_snippet}");
+                let matches = state.policy.evaluate("file", &combined);
+                let flagged = !matches.is_empty();
+                let rules_str = if flagged {
+                    Some(
+                        matches
+                            .iter()
+                            .map(|m| m.rule_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )
+                } else {
+                    None
+                };
+
+                let _ = sqlx::query(
+                    "INSERT INTO file_events (agent_id, username, action, file_path, new_path, size_bytes, sha256, flagged, matched_rules, created_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                )
+                .bind(&batch.agent_id)
+                .bind(&batch.username)
+                .bind(jstr(d, "action"))
+                .bind(&fpath)
+                .bind(jopt_str(d, "new_path"))
+                .bind(d.get("size_bytes").and_then(|v| v.as_i64()).unwrap_or(0))
+                .bind(jstr(d, "sha256"))
+                .bind(flagged)
+                .bind(&rules_str)
+                .bind(ts)
+                .execute(&state.db)
+                .await;
+
+                if flagged {
+                    let snip = if !content_snippet.is_empty() {
+                        content_snippet.chars().take(400).collect()
+                    } else {
+                        fpath
+                    };
+                    if create_incident(&state, &batch, "file", &matches, &snip, d.clone())
                         .await
                         .is_some()
                     {
                         incidents_created += 1;
                     }
+                }
+            }
+            "app_blocked" | "usb_blocked" => {
+                let reason = jstr(d, "reason");
+                let channel = if ev.event_type == "app_blocked" { "app" } else { "usb" };
+                let m = vec![DlpMatch {
+                    rule_name: if ev.event_type == "app_blocked" {
+                        "Блокировка запрещённого приложения".to_string()
+                    } else {
+                        "Блокировка неавторизованного USB (ВНИ)".to_string()
+                    },
+                    severity: Severity::High,
+                    action: "block".to_string(),
+                    matched_sample: reason.clone(),
+                }];
+                if create_incident(&state, &batch, channel, &m, &reason, d.clone())
+                    .await
+                    .is_some()
+                {
+                    incidents_created += 1;
                 }
             }
             other => {
@@ -741,6 +1005,26 @@ async fn upload_screenshot(
     });
 
     Ok(Json(json!({ "status": "ok", "id": id })))
+}
+
+/// Receives a lightweight JPEG frame for the Quadrator live wall and stores it strictly in RAM
+/// (zero DB inserts, zero disk churn!).
+async fn upload_live_frame(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mp: Multipart,
+) -> AppResult<Json<Value>> {
+    verify_agent_token(&state.config.agent_token, &headers)?;
+    let up = read_multipart_limited(mp, 2 * 1024 * 1024).await?;
+    let now = Utc::now();
+    state
+        .live_frames
+        .insert(up.agent_id.clone(), (now, up.bytes));
+    state.ws.broadcast_dashboard(WsDashboardEvent::LiveFrame {
+        agent_id: up.agent_id,
+        ts: now,
+    });
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 async fn upload_shadow(

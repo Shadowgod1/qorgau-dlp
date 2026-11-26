@@ -9,8 +9,9 @@ import dayjs from 'dayjs'
 import {
   fetchPolicies, createPolicy, updatePolicy, deletePolicy,
   fetchBlockedDomains, createBlockedDomain, deleteBlockedDomain,
+  fetchBlockedApps, createBlockedApp, deleteBlockedApp,
   fetchOperators, createOperator, updateOperator, deleteOperator,
-  type Operator,
+  type Operator, type BlockedApp,
 } from '../api/client'
 import type { Policy, BlockedDomain } from '../api/types'
 import { useAuth } from '../context/AuthContext'
@@ -382,6 +383,92 @@ function OperatorsTab() {
   )
 }
 
+function BlockedAppsTab() {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm()
+
+  const { data: apps = [], isLoading } = useQuery({
+    queryKey: ['blocked-apps'],
+    queryFn: fetchBlockedApps,
+  })
+
+  const addMut = useMutation({
+    mutationFn: (data: { pattern: string; action: string; reason?: string }) => createBlockedApp(data),
+    onSuccess: () => {
+      message.success('Правило блокировки ПО добавлено и отправлено агентам')
+      qc.invalidateQueries({ queryKey: ['blocked-apps'] })
+      setOpen(false)
+      form.resetFields()
+    },
+    onError: () => message.error('Ошибка добавления (возможно, паттерн уже существует)'),
+  })
+
+  const delMut = useMutation({
+    mutationFn: deleteBlockedApp,
+    onSuccess: () => {
+      message.success('Удалено')
+      qc.invalidateQueries({ queryKey: ['blocked-apps'] })
+    },
+  })
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+          Заблокировать приложение
+        </Button>
+      </div>
+      <Table
+        dataSource={apps}
+        rowKey="id"
+        loading={isLoading}
+        size="small"
+        pagination={{ pageSize: 25 }}
+        columns={[
+          { title: 'Паттерн процесса / пути (.exe)', dataIndex: 'pattern', render: (v: string) => <code>{v}</code> },
+          {
+            title: 'Действие', dataIndex: 'action', width: 110,
+            render: (v: string) => <Tag color={v === 'block' ? 'red' : 'orange'}>{v}</Tag>,
+          },
+          { title: 'Причина', dataIndex: 'reason', ellipsis: true },
+          {
+            title: 'Добавлено', dataIndex: 'created_at', width: 130,
+            render: (v: string) => dayjs(v).format('DD.MM.YYYY'),
+          },
+          {
+            title: '', key: 'del', width: 55,
+            render: (_: unknown, rec: BlockedApp) => (
+              <Popconfirm title="Удалить правило?" onConfirm={() => delMut.mutate(rec.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            ),
+          },
+        ]}
+      />
+      <Modal
+        title="Запретить запуск приложения"
+        open={open}
+        onCancel={() => setOpen(false)}
+        onOk={() => form.submit()}
+        confirmLoading={addMut.isPending}
+      >
+        <Form form={form} layout="vertical" onFinish={(d) => addMut.mutate(d)}>
+          <Form.Item name="pattern" label="Имя процесса или часть пути" rules={[{ required: true }]}>
+            <Input placeholder="Например: utorrent.exe, anydesk.exe, steam.exe" />
+          </Form.Item>
+          <Form.Item name="action" label="Действие" initialValue="block" rules={[{ required: true }]}>
+            <Select options={[{ value: 'block', label: 'Завершить процесс (block)' }, { value: 'alert', label: 'Только алерт (alert)' }]} />
+          </Form.Item>
+          <Form.Item name="reason" label="Причина">
+            <Input placeholder="Запрещено политикой ИБ" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -389,6 +476,7 @@ export default function SettingsPage() {
   const tabItems = [
     { key: 'policies', label: 'DLP Политики', children: <PoliciesTab /> },
     { key: 'domains', label: 'Заблокированные домены', children: <DomainsTab /> },
+    { key: 'apps', label: 'Запрещённые приложения', children: <BlockedAppsTab /> },
     ...(isAdmin ? [{ key: 'operators', label: 'Операторы', children: <OperatorsTab /> }] : []),
   ]
 

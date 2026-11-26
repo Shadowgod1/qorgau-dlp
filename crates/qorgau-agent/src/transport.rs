@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use qorgau_common::{
-    AgentConfigDto, EventBatchRequest, EventBatchResponse, EventItem, RegisterRequest,
-    WsAgentCommand,
+    AgentConfigDto, EventBatchRequest, EventBatchResponse, EventItem, PreventionRulesDto,
+    RegisterRequest, WsAgentCommand,
 };
 use reqwest::multipart::{Form, Part};
 use tokio::sync::mpsc;
@@ -115,6 +115,54 @@ impl AgentTransport {
         }
     }
 
+    pub async fn fetch_prevention_rules(&self) -> Option<PreventionRulesDto> {
+        let url = format!(
+            "{}/api/v1/monitor/prevention-rules?agent_id={}",
+            self.server_url, self.agent_id
+        );
+        match self
+            .client
+            .get(&url)
+            .header("X-Agent-Token", &self.token)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => resp.json::<PreventionRulesDto>().await.ok(),
+            _ => None,
+        }
+    }
+
+    pub async fn upload_discovery(
+        &self,
+        findings: Vec<crate::collectors::discovery::DiscoveryFindingPayload>,
+    ) {
+        let url = format!("{}/api/v1/monitor/discovery", self.server_url);
+        let body = serde_json::json!({
+            "agent_id": self.agent_id,
+            "hostname": self.hostname,
+            "username": self.username,
+            "findings": findings,
+        });
+        let _ = self
+            .client
+            .post(&url)
+            .header("X-Agent-Token", &self.token)
+            .json(&body)
+            .send()
+            .await;
+    }
+
+    pub async fn upload_inventory(&self, inv: crate::collectors::inventory::InventoryPayload) {
+        let url = format!("{}/api/v1/monitor/inventory", self.server_url);
+        let _ = self
+            .client
+            .post(&url)
+            .header("X-Agent-Token", &self.token)
+            .json(&inv)
+            .send()
+            .await;
+    }
+
     pub async fn send_heartbeat(&self) {
         let url = format!(
             "{}/api/v1/monitor/heartbeat?agent_id={}",
@@ -185,6 +233,21 @@ impl AgentTransport {
                     .unwrap(),
             );
         self.post_multipart("/api/v1/monitor/screenshot", form).await;
+    }
+
+    pub async fn upload_live_frame(&self, jpeg_bytes: Vec<u8>) {
+        let form = Form::new()
+            .text("agent_id", self.agent_id.clone())
+            .text("hostname", self.hostname.clone())
+            .text("username", self.username.clone())
+            .part(
+                "file",
+                Part::bytes(jpeg_bytes)
+                    .file_name("live.jpg")
+                    .mime_str("image/jpeg")
+                    .unwrap(),
+            );
+        self.post_multipart("/api/v1/monitor/live-frame", form).await;
     }
 
     pub async fn upload_webcam(&self, jpeg_bytes: Vec<u8>) {

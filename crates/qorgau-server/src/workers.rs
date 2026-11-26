@@ -168,7 +168,7 @@ pub fn spawn_background_workers(
         }
     });
 
-    // 4. Daily retention cleanup (DB rows + disk files for screenshots, shadow, audio, webcam)
+    // 4. Daily retention cleanup (DB rows + disk files, respecting Legal Hold!)
     let st_clean = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(3600 * 6));
@@ -176,6 +176,17 @@ pub fn spawn_background_workers(
         loop {
             interval.tick().await;
             run_retention_cleanup(&st_clean).await;
+        }
+    });
+
+    // 5. Risk-score threshold monitor (iBatyr 5.6 parity: alerts when employee risk crosses threshold or grows)
+    let st_risk = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(180));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            check_risk_thresholds(&st_risk).await;
         }
     });
 }
@@ -276,10 +287,10 @@ async fn run_ocr_job(state: &AppState, job: OcrJob) {
 
 async fn run_retention_cleanup(state: &AppState) {
     let cfg = &state.config;
-    purge_media_table(&state.db, "screenshots", "file_path", cfg.screenshots_retention_days).await;
-    purge_media_table(&state.db, "shadow_copies", "stored_path", cfg.shadow_retention_days).await;
-    purge_media_table(&state.db, "audio_recordings", "file_path", cfg.audio_retention_days).await;
-    purge_media_table(&state.db, "webcam_photos", "file_path", cfg.webcam_retention_days).await;
+    purge_media_respecting_legal_hold(&state.db, "screenshots", "file_path", cfg.screenshots_retention_days).await;
+    purge_shadow_respecting_legal_hold(&state.db, cfg.shadow_retention_days).await;
+    purge_media_respecting_legal_hold(&state.db, "audio_recordings", "file_path", cfg.audio_retention_days).await;
+    purge_media_respecting_legal_hold(&state.db, "webcam_photos", "file_path", cfg.webcam_retention_days).await;
 
     let tables = [
         "user_sessions",
@@ -292,20 +303,38 @@ async fn run_retention_cleanup(state: &AppState) {
         "print_jobs",
     ];
     for tbl in tables {
+        // Protect rows within ±15 min of any Legal Hold incident for the same agent
         let q = format!(
-            "DELETE FROM {tbl} WHERE created_at < NOW() - ($1 || ' days')::INTERVAL"
+            "DELETE FROM {tbl} t WHERE t.created_at < NOW() - ($1 || ' days')::INTERVAL \
+             AND NOT EXISTS ( \
+                SELECT 1 FROM incidents i \
+                WHERE i.legal_hold = TRUE AND i.agent_id = t.agent_id \
+                  AND t.created_at BETWEEN i.created_at - INTERVAL '15 minutes' AND i.created_at + INTERVAL '15 minutes' \
+             )"
         );
         let _ = sqlx::query(&q)
             .bind(cfg.data_retention_days)
             .execute(&state.db)
             .await;
     }
-    tracing::info!("Completed scheduled retention cleanup");
+    tracing::info!("Completed scheduled retention cleanup (Legal Hold protected)");
 }
 
-async fn purge_media_table(db: &sqlx::PgPool, table: &str, path_col: &str, days: i64) {
+async fn purge_media_respecting_legal_hold(
+    db: &sqlx::PgPool,
+    table: &str,
+    path_col: &str,
+    days: i64,
+) {
     let select_sql = format!(
-        "SELECT id, {path_col} FROM {table} WHERE created_at < NOW() - ($1 || ' days')::INTERVAL LIMIT 2000"
+        "SELECT t.id, t.{path_col} FROM {table} t \
+         WHERE t.created_at < NOW() - ($1 || ' days')::INTERVAL \
+           AND NOT EXISTS ( \
+              SELECT 1 FROM incidents i \
+              WHERE i.legal_hold = TRUE AND i.agent_id = t.agent_id \
+                AND t.created_at BETWEEN i.created_at - INTERVAL '15 minutes' AND i.created_at + INTERVAL '15 minutes' \
+           ) \
+         LIMIT 2000"
     );
     let Ok(rows): Result<Vec<(i64, String)>, _> =
         sqlx::query_as(&select_sql).bind(days).fetch_all(db).await
@@ -316,6 +345,110 @@ async fn purge_media_table(db: &sqlx::PgPool, table: &str, path_col: &str, days:
         let _ = tokio::fs::remove_file(&path).await;
         let del_sql = format!("DELETE FROM {table} WHERE id = $1");
         let _ = sqlx::query(&del_sql).bind(id).execute(db).await;
+    }
+}
+
+async fn purge_shadow_respecting_legal_hold(db: &sqlx::PgPool, days: i64) {
+    let Ok(rows): Result<Vec<(i64, String)>, _> = sqlx::query_as(
+        "SELECT s.id, s.stored_path FROM shadow_copies s \
+         LEFT JOIN incidents i ON i.id = s.incident_id \
+         WHERE s.created_at < NOW() - ($1 || ' days')::INTERVAL \
+           AND COALESCE(i.legal_hold, FALSE) = FALSE \
+         LIMIT 2000",
+    )
+    .bind(days)
+    .fetch_all(db)
+    .await
+    else {
+        return;
+    };
+    for (id, path) in rows {
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = sqlx::query("DELETE FROM shadow_copies WHERE id = $1")
+            .bind(id)
+            .execute(db)
+            .await;
+    }
+}
+
+async fn check_risk_thresholds(state: &AppState) {
+    let Ok((threshold, notify_growth)): Result<(i32, bool), _> = sqlx::query_as(
+        "SELECT risk_threshold, notify_on_risk_growth FROM alert_settings WHERE id = 1",
+    )
+    .fetch_one(&state.db)
+    .await
+    else {
+        return;
+    };
+
+    let Ok(users): Result<Vec<(String, i64)>, _> = sqlx::query_as(
+        "SELECT username, \
+                LEAST(100, \
+                    COUNT(*) FILTER (WHERE severity = 'critical') * 25 + \
+                    COUNT(*) FILTER (WHERE severity = 'high') * 12 + \
+                    COUNT(*) FILTER (WHERE severity = 'medium') * 5 + \
+                    COUNT(*) FILTER (WHERE severity = 'low') * 1 \
+                ) AS risk_score \
+         FROM incidents \
+         WHERE created_at >= NOW() - INTERVAL '30 days' AND status != 'false_positive' \
+         GROUP BY username \
+         HAVING LEAST(100, \
+                    COUNT(*) FILTER (WHERE severity = 'critical') * 25 + \
+                    COUNT(*) FILTER (WHERE severity = 'high') * 12 + \
+                    COUNT(*) FILTER (WHERE severity = 'medium') * 5 + \
+                    COUNT(*) FILTER (WHERE severity = 'low') * 1 \
+                ) >= $1",
+    )
+    .bind(threshold as i64)
+    .fetch_all(&state.db)
+    .await
+    else {
+        return;
+    };
+
+    for (username, score) in users {
+        let prev: Option<(i32,)> =
+            sqlx::query_as("SELECT last_notified_score FROM user_risk_alerts WHERE username = $1")
+                .bind(&username)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+
+        let should_notify = match prev {
+            None => true,
+            Some((last,)) => notify_growth && (score as i32) >= last + 10,
+        };
+
+        if should_notify {
+            let _ = sqlx::query(
+                "INSERT INTO user_risk_alerts (username, last_notified_score, last_notified_at) \
+                 VALUES ($1, $2, NOW()) \
+                 ON CONFLICT (username) DO UPDATE SET last_notified_score = $2, last_notified_at = NOW()",
+            )
+            .bind(&username)
+            .bind(score as i32)
+            .execute(&state.db)
+            .await;
+
+            state.ws.broadcast_dashboard(WsDashboardEvent::RiskAlert {
+                username: username.clone(),
+                risk_score: score,
+                threshold,
+            });
+
+            let _ = state.alert_tx.try_send(AlertJob {
+                incident_id: 0,
+                ts: Utc::now(),
+                agent_id: "risk-engine".to_string(),
+                hostname: "server".to_string(),
+                username: username.clone(),
+                channel: "risk_threshold".to_string(),
+                severity: if score >= 80 { Severity::Critical } else { Severity::High },
+                rules: vec![format!("Превышен порог риска ({score}/{threshold})")],
+                snippet: format!("Риск сотрудника {username} достиг {score} из 100 (порог: {threshold})"),
+            });
+        }
     }
 }
 

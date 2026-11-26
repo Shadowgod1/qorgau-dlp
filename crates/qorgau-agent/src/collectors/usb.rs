@@ -1,6 +1,8 @@
-//! Native Win32 USB monitor (detects both removable flash drives AND external USB HDD/SSDs via BusTypeUsb).
-//! Zero WMI / COM dependencies! Uses debounced file scanning so copied files finish writing
-//! before SHA-256, content analysis, local DLP check, and shadow copy upload.
+//! Native Win32 USB monitor & Active USB Whitelist Enforcement (Менеджер ВНИ — iBatyr parity).
+//! Detects BOTH removable flash drives AND external USB HDD/SSDs (`BusTypeUsb`), reads
+//! real hardware VendorId / ProductId / SerialNumber from `STORAGE_DEVICE_DESCRIPTOR`,
+//! dismounts/ejects unauthorized drives when `usb_whitelist_mode` or blocklist triggers,
+//! and performs debounced content DLP analysis + shadow copying.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -8,7 +10,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use qorgau_common::dlp::scan_builtin_dlp;
+use qorgau_common::PreventionRulesDto;
 use serde_json::json;
+use tokio::sync::RwLock;
 
 use crate::collectors::file_analyzer::analyze_file;
 use crate::notifier::notify_user_once;
@@ -23,12 +27,16 @@ const SHADOW_EXTS: &[&str] = &[
 struct DriveInfo {
     letter: String,
     name: String,
+    vendor_id: String,
+    product_id: String,
+    serial_number: String,
     size_gb: f64,
 }
 
 pub async fn run(
     transport: Arc<AgentTransport>,
     mut enabled: tokio::sync::watch::Receiver<bool>,
+    prevention_rules: Arc<RwLock<PreventionRulesDto>>,
     shadow_max_bytes: u64,
     warn_user: bool,
 ) {
@@ -44,28 +52,82 @@ pub async fn run(
 
         let current = enumerate_usb_drives();
         let current_letters: HashSet<String> = current.iter().map(|d| d.letter.clone()).collect();
+        let rules = prevention_rules.read().await.clone();
 
-        // Detect newly connected USB drives
         for drv in &current {
+            // Check USB blocklist / whitelist enforcement
+            let serial_l = drv.serial_number.to_ascii_lowercase();
+            let explicitly_blocked = rules
+                .blocked_usb_serials
+                .iter()
+                .any(|s| s.to_ascii_lowercase() == serial_l);
+            let allowed_in_whitelist = rules
+                .allowed_usb_serials
+                .iter()
+                .any(|s| s.to_ascii_lowercase() == serial_l);
+            let unauthorized = explicitly_blocked || (rules.usb_whitelist_mode && !allowed_in_whitelist);
+
+            if unauthorized {
+                let letter_ch = drv.letter.chars().next().unwrap_or('E');
+                let ejected = eject_usb_volume(letter_ch);
+                if !known_drives.contains_key(&drv.letter) {
+                    tracing::warn!(
+                        drive = %drv.letter,
+                        serial = %drv.serial_number,
+                        ejected,
+                        "Blocked unauthorized USB device"
+                    );
+                    notify_user_once(
+                        warn_user,
+                        "Qorgau DLP — USB-накопитель заблокирован",
+                        &format!(
+                            "Устройство {} (S/N: {}) не входит в белый список ВНИ и заблокировано политикой ИБ.",
+                            drv.name, drv.serial_number
+                        ),
+                    );
+                    transport.enqueue(
+                        "usb_blocked",
+                        json!({
+                            "device_id": drv.serial_number,
+                            "device_name": drv.name,
+                            "vendor_id": drv.vendor_id,
+                            "product_id": drv.product_id,
+                            "drive_letter": drv.letter,
+                            "ejected": ejected,
+                            "reason": format!("Неавторизованный USB-носитель {} (S/N: {})", drv.name, drv.serial_number),
+                        }),
+                    );
+                }
+                if ejected {
+                    continue;
+                }
+            }
+
             if !known_drives.contains_key(&drv.letter) {
-                tracing::info!(drive = %drv.letter, name = %drv.name, "USB drive connected");
+                tracing::info!(
+                    drive = %drv.letter,
+                    name = %drv.name,
+                    serial = %drv.serial_number,
+                    "USB drive connected"
+                );
                 transport.enqueue(
                     "usb",
                     json!({
-                        "device_id": format!("USB_{}", drv.letter),
+                        "device_id": drv.serial_number,
                         "device_name": drv.name,
+                        "vendor_id": drv.vendor_id,
+                        "product_id": drv.product_id,
                         "action": "connected",
                         "drive_letter": drv.letter,
                         "size_gb": drv.size_gb,
                     }),
                 );
-                // Baseline existing files on newly connected drive so we only alert on newly copied files
                 snapshot_existing_files(Path::new(&format!("{}\\", drv.letter)), &mut seen_files, 0);
                 known_drives.insert(drv.letter.clone(), drv.clone());
             }
         }
 
-        // Detect disconnected USB drives
+        // Disconnected drives
         let removed: Vec<String> = known_drives
             .keys()
             .filter(|k| !current_letters.contains(*k))
@@ -73,11 +135,10 @@ pub async fn run(
             .collect();
         for letter in removed {
             if let Some(drv) = known_drives.remove(&letter) {
-                tracing::info!(drive = %drv.letter, "USB drive disconnected");
                 transport.enqueue(
                     "usb",
                     json!({
-                        "device_id": format!("USB_{}", drv.letter),
+                        "device_id": drv.serial_number,
                         "device_name": drv.name,
                         "action": "disconnected",
                         "drive_letter": drv.letter,
@@ -88,7 +149,6 @@ pub async fn run(
             }
         }
 
-        // Scan mounted USB drives for newly written/modified files (debounced: mtime >= 1.5s old)
         for drv in known_drives.values() {
             let root = PathBuf::from(format!("{}\\", drv.letter));
             let new_files = find_new_or_modified_files(&root, &mut seen_files, 0);
@@ -133,7 +193,7 @@ async fn process_usb_file(
     transport.enqueue(
         "usb",
         json!({
-            "device_id": format!("USB_{}", drv.letter),
+            "device_id": drv.serial_number,
             "device_name": drv.name,
             "action": "file_copied",
             "drive_letter": drv.letter,
@@ -144,7 +204,6 @@ async fn process_usb_file(
         }),
     );
 
-    // Flush event batch BEFORE uploading shadow copy so incident is created first for linkage!
     let _ = transport.flush_batch().await;
 
     let ext = fpath
@@ -168,7 +227,11 @@ async fn process_usb_file(
     }
 }
 
-fn snapshot_existing_files(dir: &Path, seen: &mut HashMap<PathBuf, (u64, SystemTime)>, depth: usize) {
+fn snapshot_existing_files(
+    dir: &Path,
+    seen: &mut HashMap<PathBuf, (u64, SystemTime)>,
+    depth: usize,
+) {
     if depth > 4 || seen.len() > 20_000 {
         return;
     }
@@ -213,7 +276,6 @@ fn find_new_or_modified_files(
         } else if meta.is_file() {
             let size = meta.len();
             let mt = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            // Debounce: wait until file hasn't changed for >= 1.5s so writer finishes
             let age_ok = now
                 .duration_since(mt)
                 .map(|d| d >= Duration::from_millis(1500))
@@ -235,18 +297,120 @@ fn find_new_or_modified_files(
 }
 
 #[cfg(windows)]
-fn enumerate_usb_drives() -> Vec<DriveInfo> {
+fn read_cstr_at(buf: &[u8], offset: u32) -> String {
+    let off = offset as usize;
+    if off == 0 || off >= buf.len() {
+        return String::new();
+    }
+    let slice = &buf[off..];
+    let end = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+    String::from_utf8_lossy(&slice[..end]).trim().to_string()
+}
+
+#[cfg(windows)]
+fn query_storage_descriptor(ch: char) -> Option<(bool, String, String, String)> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows::Win32::System::Ioctl::{
         PropertyStandardQuery, StorageDeviceProperty, IOCTL_STORAGE_QUERY_PROPERTY,
         STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
     };
     use windows::Win32::System::IO::DeviceIoControl;
+
+    let dev_path: Vec<u16> = format!("\\\\.\\{ch}:\0").encode_utf16().collect();
+    unsafe {
+        let h = CreateFileW(
+            PCWSTR(dev_path.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            Default::default(),
+            None,
+        )
+        .ok()?;
+
+        let query = STORAGE_PROPERTY_QUERY {
+            PropertyId: StorageDeviceProperty,
+            QueryType: PropertyStandardQuery,
+            AdditionalParameters: [0],
+        };
+        let mut buf = [0u8; 1024];
+        let mut returned = 0u32;
+        let ok = DeviceIoControl(
+            h,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&query as *const _ as *const _),
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            Some(buf.as_mut_ptr() as *mut _),
+            buf.len() as u32,
+            Some(&mut returned),
+            None,
+        )
+        .is_ok();
+        let _ = CloseHandle(h);
+
+        if !ok || (returned as usize) < std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
+            return None;
+        }
+        let desc = &*(buf.as_ptr() as *const STORAGE_DEVICE_DESCRIPTOR);
+        let is_usb = desc.BusType.0 == 7; // BusTypeUsb
+        let vendor = read_cstr_at(&buf[..returned as usize], desc.VendorIdOffset);
+        let product = read_cstr_at(&buf[..returned as usize], desc.ProductIdOffset);
+        let serial = read_cstr_at(&buf[..returned as usize], desc.SerialNumberOffset);
+        Some((is_usb, vendor, product, serial))
+    }
+}
+
+/// Actively locks, dismounts, and ejects an unauthorized USB volume.
+#[cfg(windows)]
+fn eject_usb_volume(ch: char) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::Ioctl::{
+        FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, IOCTL_STORAGE_EJECT_MEDIA,
+    };
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    let dev_path: Vec<u16> = format!("\\\\.\\{ch}:\0").encode_utf16().collect();
+    unsafe {
+        let Ok(h) = CreateFileW(
+            PCWSTR(dev_path.as_ptr()),
+            (GENERIC_READ | GENERIC_WRITE).0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            Default::default(),
+            None,
+        ) else {
+            return false;
+        };
+        let mut br = 0u32;
+        let _ = DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0, Some(&mut br), None);
+        let _ = DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, Some(&mut br), None);
+        let ok = DeviceIoControl(h, IOCTL_STORAGE_EJECT_MEDIA, None, 0, None, 0, Some(&mut br), None).is_ok();
+        let _ = CloseHandle(h);
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+fn eject_usb_volume(_ch: char) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn enumerate_usb_drives() -> Vec<DriveInfo> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+    };
 
     const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_FIXED: u32 = 3;
@@ -258,7 +422,6 @@ fn enumerate_usb_drives() -> Vec<DriveInfo> {
             continue;
         }
         let ch = (b'A' + i as u8) as char;
-        // Skip C: system drive
         if ch == 'C' {
             continue;
         }
@@ -266,25 +429,29 @@ fn enumerate_usb_drives() -> Vec<DriveInfo> {
         let root_w: Vec<u16> = format!("{ch}:\\\0").encode_utf16().collect();
         let dtype = unsafe { GetDriveTypeW(PCWSTR(root_w.as_ptr())) };
 
+        let desc = query_storage_descriptor(ch);
         let is_usb = if dtype == DRIVE_REMOVABLE {
             true
         } else if dtype == DRIVE_FIXED {
-            // Check IOCTL_STORAGE_QUERY_PROPERTY for BusTypeUsb (catches external USB HDD/SSD!)
-            is_usb_bus_drive(ch)
+            desc.as_ref().map(|d| d.0).unwrap_or(false)
         } else {
             false
         };
-
         if !is_usb {
             continue;
         }
 
+        let (vendor_id, product_id, mut serial_number) = desc
+            .map(|(_, v, p, s)| (v, p, s))
+            .unwrap_or_default();
+
         let mut vol_name = [0u16; 128];
+        let mut vol_serial = 0u32;
         let label = unsafe {
             if GetVolumeInformationW(
                 PCWSTR(root_w.as_ptr()),
                 Some(&mut vol_name),
-                None,
+                Some(&mut vol_serial),
                 None,
                 None,
                 None,
@@ -294,7 +461,7 @@ fn enumerate_usb_drives() -> Vec<DriveInfo> {
                 let end = vol_name.iter().position(|&c| c == 0).unwrap_or(vol_name.len());
                 let s = String::from_utf16_lossy(&vol_name[..end]);
                 if s.is_empty() {
-                    format!("USB Drive ({letter})")
+                    format!("{vendor_id} {product_id}").trim().to_string()
                 } else {
                     s
                 }
@@ -302,6 +469,10 @@ fn enumerate_usb_drives() -> Vec<DriveInfo> {
                 format!("USB Drive ({letter})")
             }
         };
+
+        if serial_number.is_empty() {
+            serial_number = format!("VOL_{:08X}", vol_serial);
+        }
 
         let mut total_bytes = 0u64;
         unsafe {
@@ -316,54 +487,17 @@ fn enumerate_usb_drives() -> Vec<DriveInfo> {
 
         out.push(DriveInfo {
             letter,
-            name: label,
+            name: if label.is_empty() {
+                format!("USB ({ch}:)")
+            } else {
+                label
+            },
+            vendor_id,
+            product_id,
+            serial_number,
             size_gb: (size_gb * 100.0).round() / 100.0,
         });
     }
-
-    fn is_usb_bus_drive(ch: char) -> bool {
-        let dev_path: Vec<u16> = format!("\\\\.\\{ch}:\0").encode_utf16().collect();
-        unsafe {
-            let Ok(h) = CreateFileW(
-                PCWSTR(dev_path.as_ptr()),
-                0,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_EXISTING,
-                Default::default(),
-                None,
-            ) else {
-                return false;
-            };
-
-            let query = STORAGE_PROPERTY_QUERY {
-                PropertyId: StorageDeviceProperty,
-                QueryType: PropertyStandardQuery,
-                AdditionalParameters: [0],
-            };
-            let mut buf = [0u8; 512];
-            let mut returned = 0u32;
-            let ok = DeviceIoControl(
-                h,
-                IOCTL_STORAGE_QUERY_PROPERTY,
-                Some(&query as *const _ as *const _),
-                std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
-                Some(buf.as_mut_ptr() as *mut _),
-                buf.len() as u32,
-                Some(&mut returned),
-                None,
-            )
-            .is_ok();
-            let _ = CloseHandle(h);
-
-            if !ok || (returned as usize) < std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
-                return false;
-            }
-            let desc = &*(buf.as_ptr() as *const STORAGE_DEVICE_DESCRIPTOR);
-            desc.BusType.0 == 7 // BusTypeUsb
-        }
-    }
-
     out
 }
 

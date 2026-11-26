@@ -68,9 +68,14 @@ async fn main() -> anyhow::Result<()> {
     let os_ver = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let mut registered = transport.register(&os_ver, version).await;
 
-    // Fetch server config; strictly fall back to FAIL-CLOSED defaults (mic=false, webcam=false)
+    // Fetch server config & active prevention rules (fail-closed defaults)
     let initial_cfg = transport.fetch_config().await.unwrap_or_default();
     let shared_cfg = Arc::new(RwLock::new(initial_cfg.clone()));
+    let initial_prev = transport.fetch_prevention_rules().await.unwrap_or_default();
+    if initial_cfg.mod_web_blocker {
+        collectors::blocker::sync_hosts_blocklist(true, &initial_prev.blocked_domains);
+    }
+    let shared_prev = Arc::new(RwLock::new(initial_prev));
 
     // Watch channels for dynamic hot-reload of all collectors
     let (tx_apps, rx_apps) = watch::channel(initial_cfg.mod_apps);
@@ -78,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
     let (tx_usb, rx_usb) = watch::channel(initial_cfg.mod_usb);
     let (tx_net, rx_net) = watch::channel(initial_cfg.mod_network);
     let (tx_print, rx_print) = watch::channel(initial_cfg.mod_printer);
+    let (tx_files, rx_files) = watch::channel(initial_cfg.mod_file_monitor);
+    let (tx_blocker, rx_blocker) = watch::channel(initial_cfg.mod_app_blocker);
 
     let session_flag = Arc::new(AtomicBool::new(initial_cfg.mod_sessions));
     let clip_flags = Arc::new(ClipboardConfigFlags {
@@ -91,17 +98,73 @@ async fn main() -> anyhow::Result<()> {
     collectors::sessions::spawn_session_listener(transport.clone(), session_flag.clone());
     collectors::clipboard::spawn_clipboard_listener(transport.clone(), clip_flags.clone());
 
+    // Native transparent screen watermark overlay (0% idle CPU, hot-reloadable)
+    let watermark_state = Arc::new(std::sync::RwLock::new(
+        collectors::watermark::WatermarkSettings::from_config(
+            initial_cfg.mod_watermark,
+            initial_cfg.watermark_opacity,
+            &initial_cfg.watermark_text,
+            &initial_cfg.watermark_apps,
+            &transport.username,
+            &transport.hostname,
+        ),
+    ));
+    collectors::watermark::spawn_watermark_overlay(watermark_state.clone());
+
     // Async collectors
     tokio::spawn(collectors::apps::run(transport.clone(), rx_apps));
     tokio::spawn(collectors::web::run(transport.clone(), rx_web));
     tokio::spawn(collectors::usb::run(
         transport.clone(),
         rx_usb,
+        shared_prev.clone(),
         local_cfg.shadow_max_mb * 1024 * 1024,
         local_cfg.warn_user_enabled,
     ));
     tokio::spawn(collectors::network::run(transport.clone(), rx_net));
     tokio::spawn(collectors::printer::run(transport.clone(), rx_print));
+    tokio::spawn(collectors::files::run(transport.clone(), rx_files));
+    tokio::spawn(collectors::blocker::run_app_blocker(
+        transport.clone(),
+        rx_blocker,
+        shared_prev.clone(),
+        local_cfg.warn_user_enabled,
+    ));
+
+    // Initial Inventory scan (if enabled) + periodic 6h refresh
+    let t_inv = transport.clone();
+    let cfg_inv = shared_cfg.clone();
+    tokio::spawn(async move {
+        if cfg_inv.read().await.mod_inventory {
+            collectors::inventory::collect_and_upload(t_inv.clone()).await;
+        }
+        let mut iv = tokio::time::interval(Duration::from_secs(3600 * 6));
+        iv.tick().await;
+        loop {
+            iv.tick().await;
+            if cfg_inv.read().await.mod_inventory {
+                collectors::inventory::collect_and_upload(t_inv.clone()).await;
+            }
+        }
+    });
+
+    // Periodic Data Discovery crawler (if enabled in config)
+    let t_disc = transport.clone();
+    let cfg_disc = shared_cfg.clone();
+    tokio::spawn(async move {
+        let mut iv = tokio::time::interval(Duration::from_secs(3600 * 12));
+        iv.tick().await;
+        loop {
+            iv.tick().await;
+            let (on, paths) = {
+                let c = cfg_disc.read().await;
+                (c.mod_discovery, c.discovery_paths.clone())
+            };
+            if on {
+                collectors::discovery::run_discovery_scan(t_disc.clone(), paths).await;
+            }
+        }
+    });
 
     // Periodic screenshots
     let t_scr = transport.clone();
@@ -197,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
 
     let t_cmd = transport.clone();
     let cfg_cmd = shared_cfg.clone();
+    let prev_cmd = shared_prev.clone();
     let cam_stream_flag = webcam_streaming.clone();
     let mic_cont_flag = mic_continuous.clone();
     let mic_stop_cmd = mic_stop.clone();
@@ -217,6 +281,18 @@ async fn main() -> anyhow::Result<()> {
                         .await
                         {
                             t.upload_screenshot(bytes).await;
+                        }
+                    });
+                }
+                WsAgentCommand::TakeLiveFrame => {
+                    let t = t_cmd.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Some(bytes)) = tokio::task::spawn_blocking(move || {
+                            collectors::screenshot::capture_primary_jpeg(900, 48)
+                        })
+                        .await
+                        {
+                            t.upload_live_frame(bytes).await;
                         }
                     });
                 }
@@ -331,12 +407,40 @@ async fn main() -> anyhow::Result<()> {
                             &tx_usb,
                             &tx_net,
                             &tx_print,
+                            &tx_files,
+                            &tx_blocker,
                             &session_flag,
                             &clip_flags,
+                            &watermark_state,
+                            &t_cmd.username,
+                            &t_cmd.hostname,
                         )
                         .await;
+                        let domains = prev_cmd.read().await.blocked_domains.clone();
+                        collectors::blocker::sync_hosts_blocklist(fresh.mod_web_blocker, &domains);
                         tracing::info!(name = %fresh.name, "Hot-reloaded server config");
                     }
+                }
+                WsAgentCommand::ReloadPreventionRules => {
+                    if let Some(fresh_rules) = t_cmd.fetch_prevention_rules().await {
+                        let web_blk = cfg_cmd.read().await.mod_web_blocker;
+                        collectors::blocker::sync_hosts_blocklist(web_blk, &fresh_rules.blocked_domains);
+                        *prev_cmd.write().await = fresh_rules;
+                        tracing::info!("Hot-reloaded prevention rules (USB/Apps/Domains)");
+                    }
+                }
+                WsAgentCommand::RunDiscoveryScan => {
+                    let paths = cfg_cmd.read().await.discovery_paths.clone();
+                    let t = t_cmd.clone();
+                    tokio::spawn(async move {
+                        collectors::discovery::run_discovery_scan(t, paths).await;
+                    });
+                }
+                WsAgentCommand::RunInventoryScan => {
+                    let t = t_cmd.clone();
+                    tokio::spawn(async move {
+                        collectors::inventory::collect_and_upload(t).await;
+                    });
                 }
             }
         }
@@ -378,8 +482,13 @@ async fn apply_config(
     tx_usb: &watch::Sender<bool>,
     tx_net: &watch::Sender<bool>,
     tx_print: &watch::Sender<bool>,
+    tx_files: &watch::Sender<bool>,
+    tx_blocker: &watch::Sender<bool>,
     session_flag: &AtomicBool,
     clip_flags: &ClipboardConfigFlags,
+    watermark_state: &std::sync::RwLock<collectors::watermark::WatermarkSettings>,
+    username: &str,
+    hostname: &str,
 ) {
     *shared_cfg.write().await = fresh.clone();
     let _ = tx_apps.send(fresh.mod_apps);
@@ -387,6 +496,8 @@ async fn apply_config(
     let _ = tx_usb.send(fresh.mod_usb);
     let _ = tx_net.send(fresh.mod_network);
     let _ = tx_print.send(fresh.mod_printer);
+    let _ = tx_files.send(fresh.mod_file_monitor);
+    let _ = tx_blocker.send(fresh.mod_app_blocker);
     session_flag.store(fresh.mod_sessions, Ordering::Relaxed);
     clip_flags
         .mod_clipboard
@@ -394,4 +505,14 @@ async fn apply_config(
     clip_flags
         .mod_messenger
         .store(fresh.mod_messenger, Ordering::Relaxed);
+    if let Ok(mut wm) = watermark_state.write() {
+        *wm = collectors::watermark::WatermarkSettings::from_config(
+            fresh.mod_watermark,
+            fresh.watermark_opacity,
+            &fresh.watermark_text,
+            &fresh.watermark_apps,
+            username,
+            hostname,
+        );
+    }
 }

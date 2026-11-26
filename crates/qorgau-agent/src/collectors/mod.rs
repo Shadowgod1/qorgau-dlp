@@ -1,12 +1,17 @@
 pub mod apps;
+pub mod blocker;
 pub mod clipboard;
+pub mod discovery;
 pub mod file_analyzer;
+pub mod files;
+pub mod inventory;
 pub mod microphone;
 pub mod network;
 pub mod printer;
 pub mod screenshot;
 pub mod sessions;
 pub mod usb;
+pub mod watermark;
 pub mod web;
 pub mod webcam;
 pub mod win_util;

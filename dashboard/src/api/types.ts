@@ -13,6 +13,7 @@ export interface Agent {
   is_online: boolean
   last_seen: string | null
   registered_at: string | null
+  config_id?: number | null
 }
 
 export interface Incident {
@@ -28,6 +29,10 @@ export interface Incident {
   meta: Record<string, unknown>
   created_at: string | null
   updated_at: string | null
+  legal_hold?: boolean
+  assigned_to?: string | null
+  group_tag?: string | null
+  resolution_note?: string | null
 }
 
 export interface Screenshot {

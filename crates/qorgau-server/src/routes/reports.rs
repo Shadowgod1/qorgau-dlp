@@ -17,7 +17,7 @@ use crate::audit::{verify_chain, write_audit};
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::routes::activity::query_worktime;
-use crate::routes::incidents::IncidentRow;
+use crate::routes::incidents::{IncidentRow, INCIDENT_COLS};
 use crate::state::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -124,17 +124,16 @@ async fn user_report(
 ) -> AppResult<Json<Value>> {
     let days = q.days.clamp(1, 365);
 
-    let rows: Vec<IncidentRow> = sqlx::query_as(
-        "SELECT id, agent_id, hostname, username, channel, severity, status, \
-                matched_rules, snippet, meta, created_at, updated_at \
-         FROM incidents \
+    let sql = format!(
+        "SELECT {INCIDENT_COLS} FROM incidents \
          WHERE username = $1 AND created_at >= NOW() - ($2 || ' days')::INTERVAL \
-         ORDER BY created_at DESC LIMIT 200",
-    )
-    .bind(&username)
-    .bind(days)
-    .fetch_all(&state.db)
-    .await?;
+         ORDER BY created_at DESC LIMIT 200"
+    );
+    let rows: Vec<IncidentRow> = sqlx::query_as(&sql)
+        .bind(&username)
+        .bind(days)
+        .fetch_all(&state.db)
+        .await?;
 
     let items: Vec<IncidentRow> = rows.into_iter().map(|r| r.apply_rbac(user.role)).collect();
     let total = items.len();
@@ -292,15 +291,15 @@ async fn export_report(
     Query(q): Query<ExportQuery>,
 ) -> AppResult<Response> {
     let days = q.days.clamp(1, 365);
-    let rows: Vec<IncidentRow> = sqlx::query_as(
-        "SELECT id, agent_id, hostname, username, channel, severity, status, \
-                matched_rules, snippet, meta, created_at, updated_at \
-         FROM incidents WHERE created_at >= NOW() - ($1 || ' days')::INTERVAL \
-         ORDER BY created_at DESC LIMIT 10000",
-    )
-    .bind(days)
-    .fetch_all(&state.db)
-    .await?;
+    let sql = format!(
+        "SELECT {INCIDENT_COLS} FROM incidents \
+         WHERE created_at >= NOW() - ($1 || ' days')::INTERVAL \
+         ORDER BY created_at DESC LIMIT 10000"
+    );
+    let rows: Vec<IncidentRow> = sqlx::query_as(&sql)
+        .bind(days)
+        .fetch_all(&state.db)
+        .await?;
 
     let items: Vec<IncidentRow> = rows.into_iter().map(|r| r.apply_rbac(user.role)).collect();
 

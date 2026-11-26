@@ -1,0 +1,449 @@
+/* Qorgau DLP v2.0 — tasteskill 2.5.1 Visual System
+ * Palette: blue-black-cornflower | Type: Geist + Geist Mono | Radius: sharp (4 / 6 / 8)
+ * Discipline: 92% neutral monochrome, single accent (#5ab9fc / #0a0d14), no violet, no glass, no glow.
+ */
+
+:root {
+  /* Dealt palette tokens (dark default) */
+  --p-bg: #0a0d14;
+  --p-surface: #131824;
+  --p-elevated: #182030;
+  --p-ink: #e9edf3;
+  --p-ink-soft: rgba(233, 237, 243, 0.84);
+  --p-muted: #8891a1;
+  --p-hairline: rgba(233, 237, 243, 0.11);
+  --p-hairline-strong: rgba(233, 237, 243, 0.22);
+  --p-top-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --p-accent: #5ab9fc;
+  --p-accent-ink: #0a0d14;
+  --p-accent-soft: rgba(90, 185, 252, 0.11);
+
+  /* Semantic state tokens (used strictly for status/severity data, never decoration) */
+  --st-danger: #ef4444;
+  --st-warn: #f59e0b;
+  --st-ok: #10b981;
+
+  /* Sharp radius scale */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+
+  /* Typography */
+  --font-display: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-text: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* Motion tokens (motion.md) */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --m-in: 150ms;
+  --m-out: 120ms;
+  --m-press: 90ms;
+}
+
+[data-theme='light'] {
+  --p-bg: #f4f5f7;
+  --p-surface: #ffffff;
+  --p-elevated: #ffffff;
+  --p-ink: #0a0d14;
+  --p-ink-soft: rgba(10, 13, 20, 0.84);
+  --p-muted: #54575f;
+  --p-hairline: rgba(10, 13, 20, 0.10);
+  --p-hairline-strong: rgba(10, 13, 20, 0.22);
+  --p-top-highlight: none;
+  --p-accent: #0f62fe;
+  --p-accent-ink: #ffffff;
+  --p-accent-soft: rgba(15, 98, 254, 0.08);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5,
+.ant-typography h1, .ant-typography h2, .ant-typography h3, .ant-typography h4, .ant-typography h5 {
+  font-family: var(--font-display) !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.025em;
+}
+
+.qorgau-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+/* Instant focus ring (system.md — never animates) */
+:focus-visible {
+  outline: 2px solid var(--p-accent) !important;
+  outline-offset: 2px !important;
+  transition: none !important;
+}
+
+.ant-input-affix-wrapper .ant-input:focus-visible,
+.ant-input-affix-wrapper .ant-input:focus,
+.ant-select-selector input:focus-visible {
+  outline: none !important;
+}
+
+.ant-input-affix-wrapper:focus-within,
+.ant-input:focus {
+  border-color: var(--p-accent) !important;
+  box-shadow: 0 0 0 2px var(--p-accent-soft) !important;
+}
+
+/* Minimal scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--p-hairline-strong);
+  border-radius: 3px;
+}
+
+/* Sider navigation */
+.ts-sider-scroll {
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0 24px;
+}
+
+.ts-sider-scroll .ant-menu-item-group-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--p-muted) !important;
+  padding: 16px 16px 6px !important;
+  letter-spacing: 0;
+}
+
+.ts-sider-scroll .ant-menu-item {
+  border-radius: var(--r-sm) !important;
+  margin: 1px 10px !important;
+  width: calc(100% - 20px) !important;
+  height: 34px !important;
+  line-height: 34px !important;
+  font-size: 13.5px;
+  position: relative;
+  transition: background var(--m-in) var(--ease), color var(--m-in) var(--ease) !important;
+}
+
+.ts-sider-scroll .ant-menu-item-selected::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: var(--p-accent);
+  border-radius: 1px;
+}
+
+/* Cards: one strict recipe (1px hairline, dark inner top highlight, zero rest shadow) */
+.ant-card {
+  background: var(--p-surface) !important;
+  border: 1px solid var(--p-hairline) !important;
+  border-radius: var(--r-lg) !important;
+  box-shadow: var(--p-top-highlight) !important;
+}
+
+.ant-card .ant-card-head {
+  border-bottom: 1px solid var(--p-hairline) !important;
+  min-height: 46px;
+  padding: 0 20px;
+}
+
+.ant-card .ant-card-head-title {
+  font-weight: 500;
+  font-size: 14px;
+  letter-spacing: -0.015em;
+}
+
+/* Linked / Interactive cards: exact 2px lift on fine-pointer hover (motion.md) */
+.ts-card-link {
+  cursor: pointer;
+  transition: transform 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease) !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ts-card-link:hover {
+    transform: translateY(-2px);
+    border-color: var(--p-hairline-strong) !important;
+    box-shadow: var(--p-top-highlight), 0 12px 24px rgba(0, 0, 0, 0.16) !important;
+  }
+}
+
+.ts-card-link.is-active {
+  border-color: var(--p-accent) !important;
+  box-shadow: inset 0 0 0 1px var(--p-accent) !important;
+}
+
+/* Buttons: step up 1px on hover, press down 1px + scale .985 (motion.md) */
+.ant-btn {
+  border-radius: var(--r-sm) !important;
+  font-weight: 500 !important;
+  box-shadow: none !important;
+  transition: transform var(--m-in) var(--ease), background-color var(--m-in) var(--ease), border-color var(--m-in) var(--ease), color var(--m-in) var(--ease) !important;
+}
+
+.ant-btn-primary {
+  background: var(--p-accent) !important;
+  color: var(--p-accent-ink) !important;
+  border-color: var(--p-accent) !important;
+}
+
+.ant-btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ant-btn:not(.ant-btn-link):not(.ant-btn-text):not(:disabled):hover {
+    transform: translateY(-1px);
+  }
+}
+
+.ant-btn:not(.ant-btn-link):not(:disabled):active {
+  transform: translateY(1px) scale(0.985) !important;
+  transition-duration: var(--m-press) !important;
+}
+
+/* Tables: clean hairline rows */
+.ant-table {
+  background: transparent !important;
+}
+
+.ant-table-thead > tr > th {
+  background: transparent !important;
+  color: var(--p-muted) !important;
+  font-weight: 500 !important;
+  font-size: 12.5px !important;
+  border-bottom: 1px solid var(--p-hairline) !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--p-hairline) !important;
+  font-size: 13.5px;
+}
+
+/* Header command trigger */
+.ts-cmd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--p-hairline);
+  background: var(--p-bg);
+  color: var(--p-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color var(--m-in) var(--ease), color var(--m-in) var(--ease);
+}
+
+.ts-cmd-trigger:hover {
+  border-color: var(--p-hairline-strong);
+  color: var(--p-ink);
+}
+
+.ts-kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--p-hairline);
+  color: var(--p-muted);
+}
+
+/* Status dot (still dot, optional single live ring in header only) */
+.ts-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+@keyframes tsLiveRing {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); }
+  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.ts-dot--live {
+  background: var(--st-ok);
+  animation: tsLiveRing 2.4s infinite;
+}
+
+/* One-shot subtle entrance on login / top header */
+@keyframes tsEnter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ts-enter {
+  animation: tsEnter 520ms var(--ease-enter) both;
+}
+
+/* Page header rhythm (equal left & right edges, hairline separator) */
+.ts-page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--p-hairline);
+}
+
+.ts-page-title {
+  margin: 0 !important;
+  font-size: 22px !important;
+  line-height: 1.25 !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.025em;
+}
+
+.ts-page-sub {
+  color: var(--p-muted);
+  font-size: 13.5px;
+  margin-top: 4px;
+  display: block;
+}
+
+/* KPI grid block: 4 cells sharing crisp borders */
+.ts-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 1100px) {
+  .ts-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .ts-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ts-kpi-tile {
+  background: var(--p-surface);
+  border: 1px solid var(--p-hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--p-top-highlight);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 122px;
+}
+
+.ts-kpi-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--p-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ts-kpi-value {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.15;
+  margin-top: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  color: var(--p-ink);
+}
+
+.ts-kpi-meta {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--p-muted);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Clean Print / PDF export mode for Reports */
+@media print {
+  .qorgau-no-print,
+  .ant-layout-sider,
+  .ant-layout-header {
+    display: none !important;
+  }
+
+  .ant-layout {
+    margin-left: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .ant-layout-content {
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  body,
+  .ant-card,
+  .ts-kpi-tile {
+    background: #ffffff !important;
+    color: #0a0d14 !important;
+    border-color: #d1d5db !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  .qorgau-print-header {
+    display: block !important;
+  }
+}
+
+.qorgau-print-header {
+  display: none;
+}

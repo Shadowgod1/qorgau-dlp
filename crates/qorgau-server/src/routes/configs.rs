@@ -51,6 +51,10 @@ pub struct AgentConfigDbRow {
     pub webcam_interval: i32,
     pub webcam_quality: i32,
     pub webcam_max_w: i32,
+    pub mod_watermark: bool,
+    pub watermark_opacity: i32,
+    pub watermark_text: String,
+    pub watermark_apps: String,
     pub net_alert_sensitive_ports: bool,
     pub net_alert_unknown_ext: bool,
     pub net_block_tor: bool,
@@ -62,6 +66,13 @@ pub struct AgentConfigDbRow {
     pub usb_alert_on_connect: bool,
     pub usb_analyze_content: bool,
     pub usb_alert_executables: bool,
+    pub usb_whitelist_mode: bool,
+    pub mod_file_monitor: bool,
+    pub mod_discovery: bool,
+    pub discovery_paths: String,
+    pub mod_inventory: bool,
+    pub mod_app_blocker: bool,
+    pub mod_web_blocker: bool,
     pub created_by: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -93,6 +104,10 @@ impl AgentConfigDbRow {
             webcam_interval: self.webcam_interval,
             webcam_quality: self.webcam_quality,
             webcam_max_w: self.webcam_max_w,
+            mod_watermark: self.mod_watermark,
+            watermark_opacity: self.watermark_opacity,
+            watermark_text: self.watermark_text,
+            watermark_apps: self.watermark_apps,
             net_alert_sensitive_ports: self.net_alert_sensitive_ports,
             net_alert_unknown_ext: self.net_alert_unknown_ext,
             net_block_tor: self.net_block_tor,
@@ -104,6 +119,13 @@ impl AgentConfigDbRow {
             usb_alert_on_connect: self.usb_alert_on_connect,
             usb_analyze_content: self.usb_analyze_content,
             usb_alert_executables: self.usb_alert_executables,
+            usb_whitelist_mode: self.usb_whitelist_mode,
+            mod_file_monitor: self.mod_file_monitor,
+            mod_discovery: self.mod_discovery,
+            discovery_paths: self.discovery_paths,
+            mod_inventory: self.mod_inventory,
+            mod_app_blocker: self.mod_app_blocker,
+            mod_web_blocker: self.mod_web_blocker,
             created_by: self.created_by,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -121,9 +143,12 @@ pub const CONFIG_SELECT_COLS: &str = "\
     screenshot_interval, screenshot_quality, screenshot_max_w, \
     microphone_duration, microphone_sample_rate, \
     webcam_interval, webcam_quality, webcam_max_w, \
+    mod_watermark, watermark_opacity, watermark_text, watermark_apps, \
     net_alert_sensitive_ports, net_alert_unknown_ext, net_block_tor, \
     web_alert_social, web_alert_adult, web_alert_gambling, web_alert_streaming, web_alert_crypto, \
     usb_alert_on_connect, usb_analyze_content, usb_alert_executables, \
+    usb_whitelist_mode, mod_file_monitor, mod_discovery, discovery_paths, \
+    mod_inventory, mod_app_blocker, mod_web_blocker, \
     created_by, created_at, updated_at";
 
 pub async fn fetch_effective_config_for_agent(
@@ -223,11 +248,14 @@ async fn create_config(
             screenshot_interval, screenshot_quality, screenshot_max_w, \
             microphone_duration, microphone_sample_rate, \
             webcam_interval, webcam_quality, webcam_max_w, \
+            mod_watermark, watermark_opacity, watermark_text, watermark_apps, \
             net_alert_sensitive_ports, net_alert_unknown_ext, net_block_tor, \
             web_alert_social, web_alert_adult, web_alert_gambling, web_alert_streaming, web_alert_crypto, \
-            usb_alert_on_connect, usb_analyze_content, usb_alert_executables, created_by \
+            usb_alert_on_connect, usb_analyze_content, usb_alert_executables, \
+            usb_whitelist_mode, mod_file_monitor, mod_discovery, discovery_paths, \
+            mod_inventory, mod_app_blocker, mod_web_blocker, created_by \
         ) VALUES ( \
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33 \
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44 \
         ) RETURNING {CONFIG_SELECT_COLS}"
     );
 
@@ -253,6 +281,10 @@ async fn create_config(
         .bind(body.webcam_interval.clamp(10, 3600))
         .bind(body.webcam_quality.clamp(10, 95))
         .bind(body.webcam_max_w.clamp(320, 1920))
+        .bind(body.mod_watermark)
+        .bind(body.watermark_opacity.clamp(5, 80))
+        .bind(body.watermark_text.trim())
+        .bind(body.watermark_apps.trim())
         .bind(body.net_alert_sensitive_ports)
         .bind(body.net_alert_unknown_ext)
         .bind(body.net_block_tor)
@@ -264,6 +296,13 @@ async fn create_config(
         .bind(body.usb_alert_on_connect)
         .bind(body.usb_analyze_content)
         .bind(body.usb_alert_executables)
+        .bind(body.usb_whitelist_mode)
+        .bind(body.mod_file_monitor)
+        .bind(body.mod_discovery)
+        .bind(body.discovery_paths.trim())
+        .bind(body.mod_inventory)
+        .bind(body.mod_app_blocker)
+        .bind(body.mod_web_blocker)
         .bind(&admin.username)
         .fetch_one(&state.db)
         .await
@@ -297,12 +336,15 @@ async fn update_config(
             screenshot_interval=$14, screenshot_quality=$15, screenshot_max_w=$16, \
             microphone_duration=$17, microphone_sample_rate=$18, \
             webcam_interval=$19, webcam_quality=$20, webcam_max_w=$21, \
-            net_alert_sensitive_ports=$22, net_alert_unknown_ext=$23, net_block_tor=$24, \
-            web_alert_social=$25, web_alert_adult=$26, web_alert_gambling=$27, \
-            web_alert_streaming=$28, web_alert_crypto=$29, \
-            usb_alert_on_connect=$30, usb_analyze_content=$31, usb_alert_executables=$32, \
+            mod_watermark=$22, watermark_opacity=$23, watermark_text=$24, watermark_apps=$25, \
+            net_alert_sensitive_ports=$26, net_alert_unknown_ext=$27, net_block_tor=$28, \
+            web_alert_social=$29, web_alert_adult=$30, web_alert_gambling=$31, \
+            web_alert_streaming=$32, web_alert_crypto=$33, \
+            usb_alert_on_connect=$34, usb_analyze_content=$35, usb_alert_executables=$36, \
+            usb_whitelist_mode=$37, mod_file_monitor=$38, mod_discovery=$39, discovery_paths=$40, \
+            mod_inventory=$41, mod_app_blocker=$42, mod_web_blocker=$43, \
             updated_at=NOW() \
-         WHERE id=$33 RETURNING {CONFIG_SELECT_COLS}"
+         WHERE id=$44 RETURNING {CONFIG_SELECT_COLS}"
     );
 
     let row: Option<AgentConfigDbRow> = sqlx::query_as(&sql)
@@ -327,6 +369,10 @@ async fn update_config(
         .bind(body.webcam_interval.clamp(10, 3600))
         .bind(body.webcam_quality.clamp(10, 95))
         .bind(body.webcam_max_w.clamp(320, 1920))
+        .bind(body.mod_watermark)
+        .bind(body.watermark_opacity.clamp(5, 80))
+        .bind(body.watermark_text.trim())
+        .bind(body.watermark_apps.trim())
         .bind(body.net_alert_sensitive_ports)
         .bind(body.net_alert_unknown_ext)
         .bind(body.net_block_tor)
@@ -338,6 +384,13 @@ async fn update_config(
         .bind(body.usb_alert_on_connect)
         .bind(body.usb_analyze_content)
         .bind(body.usb_alert_executables)
+        .bind(body.usb_whitelist_mode)
+        .bind(body.mod_file_monitor)
+        .bind(body.mod_discovery)
+        .bind(body.discovery_paths.trim())
+        .bind(body.mod_inventory)
+        .bind(body.mod_app_blocker)
+        .bind(body.mod_web_blocker)
         .bind(config_id)
         .fetch_optional(&state.db)
         .await

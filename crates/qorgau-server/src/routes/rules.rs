@@ -263,6 +263,9 @@ async fn add_domain(
     .map_err(|e| AppError::from_db_unique(e, "Domain is already in blocklist"))?;
 
     state.policy.reload_blocked_domains(&state.db).await?;
+    state
+        .ws
+        .broadcast_to_all_agents(qorgau_common::WsAgentCommand::ReloadPreventionRules);
     write_audit(
         &state.db,
         &admin.username,
@@ -289,6 +292,9 @@ async fn remove_domain(
         return Err(AppError::NotFound("Domain not found".to_string()));
     }
     state.policy.reload_blocked_domains(&state.db).await?;
+    state
+        .ws
+        .broadcast_to_all_agents(qorgau_common::WsAgentCommand::ReloadPreventionRules);
     write_audit(
         &state.db,
         &admin.username,

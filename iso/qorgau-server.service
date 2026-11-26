@@ -1,0 +1,21 @@
+[Unit]
+Description=Qorgau DLP Server v2.0 (Rust)
+After=network-online.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=qorgau
+Group=qorgau
+WorkingDirectory=/var/lib/qorgau
+EnvironmentFile=/etc/qorgau/qorgau.env
+ExecStart=/usr/local/bin/qorgau-server
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/qorgau
+
+[Install]
+WantedBy=multi-user.target

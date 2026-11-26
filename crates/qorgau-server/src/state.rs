@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
@@ -15,4 +17,6 @@ pub struct AppState {
     pub login_limiter: LoginRateLimiter,
     pub alert_tx: mpsc::Sender<AlertJob>,
     pub ocr_tx: mpsc::Sender<OcrJob>,
+    /// In-memory latest live frame per agent for Quadrator (0 disk/DB bloat!)
+    pub live_frames: DashMap<String, (DateTime<Utc>, Vec<u8>)>,
 }

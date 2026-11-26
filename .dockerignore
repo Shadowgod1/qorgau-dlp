@@ -1,0 +1,13 @@
+.git
+.env
+target/
+dashboard/node_modules/
+dashboard/dist/
+legacy/
+iso/cache/
+iso/payload/
+dist/
+downloads/
+*.iso
+*.db
+*.log
