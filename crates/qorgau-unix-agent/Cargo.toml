@@ -1,0 +1,20 @@
+[package]
+name = "qorgau-unix-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+qorgau-common = { path = "../qorgau-common" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+toml = "0.8"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }

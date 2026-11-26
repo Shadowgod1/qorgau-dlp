@@ -29,7 +29,7 @@ tags: [qorgau-dlp, ibatyr, roadmap, comparison]
 
 - [x] **Интеграция с Active Directory / LDAP** — синхронизация оргструктуры, отделов, должностей и корпоративных доменов (`/directory/settings`, `/directory/import`, `/directory/users`).
 - [x] **Почтовый перехват (SMTP / IMAP / Outlook Add-in)** — приём и DLP-анализ писем и вложений в реальном времени с блокировкой и инцидентами (`/mail/events`).
-- [ ] **Кроссплатформенные агенты** — Linux (`x86_64` / Astra Linux / Ubuntu) и macOS на единой кодовой базе `qorgau-common`.
+- [x] **Кроссплатформенные агенты** — Linux (`x86_64` / Astra Linux / Ubuntu) и macOS на единой кодовой базе `qorgau-common` (`crates/qorgau-unix-agent`, systemd + LaunchDaemon).
 - [x] **SIEM-коннектор (CEF / Syslog RFC 5424 / Webhook)** — потоковая отправка алертов в QRadar, Splunk, Wazuh, MaxPatrol SIEM + управление и тест в веб-консоли (`/settings/siem`).
 - [x] **Детекция аномалий (UEBA)** — выявление ночной активности, массового копирования/USB и резкого всплеска инцидентов относительно 14-дневного базового профиля (`/ueba/anomalies`).
 - [x] **TLS / HTTPS из коробки** — авто-генерация самоподписанного сертификата (`/etc/qorgau/tls/qorgau.crt`) и HTTPS (порт 443) в ISO Appliance.

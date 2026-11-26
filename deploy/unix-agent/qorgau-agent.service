@@ -1,0 +1,14 @@
+[Unit]
+Description=Qorgau DLP Unix Agent (Linux)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/qorgau-unix-agent
+Restart=always
+RestartSec=10
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

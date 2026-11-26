@@ -1595,6 +1595,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "qorgau-unix-agent"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "qorgau-common",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

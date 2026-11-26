@@ -4,6 +4,7 @@ members = [
     "crates/qorgau-common",
     "crates/qorgau-server",
     "crates/qorgau-agent",
+    "crates/qorgau-unix-agent",
 ]
 
 [workspace.package]
