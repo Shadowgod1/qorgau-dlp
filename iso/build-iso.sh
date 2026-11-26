@@ -30,7 +30,7 @@ if [ ! -d "$DEB_CACHE" ] || [ -z "$(ls -A "$DEB_CACHE" 2>/dev/null)" ]; then
     apt-get update
     apt-get install -y --download-only --no-install-recommends \
         -o Dir::Cache::archives="$DEB_CACHE" \
-        postgresql nginx-light tesseract-ocr tesseract-ocr-rus tesseract-ocr-kaz tesseract-ocr-eng
+        postgresql nginx-light openssl tesseract-ocr tesseract-ocr-rus tesseract-ocr-kaz tesseract-ocr-eng
     rm -rf "$DEB_CACHE/partial" "$DEB_CACHE/lock"
 fi
 

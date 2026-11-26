@@ -595,3 +595,62 @@ export const triggerInventoryScan = (agentId?: string) =>
 
 export const downloadWindowsAgent = () =>
   downloadFile('/agent-download/windows', 'qorgau-agent.exe')
+
+// ── SIEM & Alerting ──────────────────────────────────────────────────────────
+export interface SiemSettings {
+  enabled: boolean
+  webhook_url: string
+  has_webhook_token: boolean
+  syslog_host: string
+  syslog_port: number
+  syslog_proto: 'udp' | 'tcp'
+  telegram_enabled: boolean
+  has_telegram_token: boolean
+  telegram_chat_id: string
+  min_severity: 'low' | 'medium' | 'high' | 'critical'
+  env_fallback_active: boolean
+  updated_by: string | null
+  updated_at: string
+}
+
+export const fetchSiemSettings = () =>
+  http.get<SiemSettings>('/settings/siem').then(r => r.data)
+
+export const updateSiemSettings = (data: {
+  enabled: boolean
+  webhook_url: string
+  webhook_token?: string
+  syslog_host: string
+  syslog_port: number
+  syslog_proto: 'udp' | 'tcp'
+  telegram_enabled: boolean
+  telegram_token?: string
+  telegram_chat_id: string
+  min_severity: string
+}) => http.put<SiemSettings>('/settings/siem', data).then(r => r.data)
+
+export const testSiemDelivery = () =>
+  http.post<{ webhook: string; syslog: string; telegram: string }>('/settings/siem/test').then(r => r.data)
+
+// ── UEBA (Behavioral Anomaly Detection) ──────────────────────────────────────
+export interface UebaAnomaly {
+  id: number
+  username: string
+  anomaly_type: string
+  severity: string
+  score_delta: number
+  title: string
+  details: Record<string, unknown>
+  status: 'open' | 'acknowledged' | 'resolved' | 'false_positive'
+  detected_date: string
+  created_at: string
+}
+
+export const fetchUebaAnomalies = (params?: { status?: string; username?: string; limit?: number }) =>
+  http.get<UebaAnomaly[]>('/ueba/anomalies', { params }).then(r => r.data)
+
+export const patchUebaAnomaly = (id: number, status: string) =>
+  http.patch<UebaAnomaly>(`/ueba/anomalies/${id}`, { status }).then(r => r.data)
+
+export const triggerUebaScan = () =>
+  http.post<{ detected: number }>('/ueba/scan').then(r => r.data)

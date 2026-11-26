@@ -10,7 +10,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import {
   fetchEmployeeProfile, fetchEmployees, fetchRiskThreshold, updateRiskThreshold,
-  type EmployeeSummary,
+  fetchUebaAnomalies, patchUebaAnomaly, triggerUebaScan,
+  type EmployeeSummary, type UebaAnomaly,
 } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
@@ -393,7 +394,121 @@ export default function EmployeesPage() {
         />
       </Card>
 
+      <UebaAnomaliesCard onSelectUser={setSelectedUser} />
+
       <EmployeeCardDrawer username={selectedUser} days={days} onClose={() => setSelectedUser(null)} />
     </div>
+  )
+}
+
+function UebaAnomaliesCard({ onSelectUser }: { onSelectUser: (u: string) => void }) {
+  const qc = useQueryClient()
+  const { user } = useAuth()
+  const canEdit = user?.role === 'admin' || user?.role === 'security_officer'
+
+  const { data: anomalies = [], isLoading } = useQuery({
+    queryKey: ['ueba-anomalies'],
+    queryFn: () => fetchUebaAnomalies({ limit: 50 }),
+  })
+
+  const scanMut = useMutation({
+    mutationFn: triggerUebaScan,
+    onSuccess: (res) => {
+      message.success(`UEBA-сканирование завершено: новых аномалий — ${res.detected}`)
+      qc.invalidateQueries({ queryKey: ['ueba-anomalies'] })
+    },
+    onError: () => message.error('Ошибка запуска UEBA-сканирования'),
+  })
+
+  const statusMut = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => patchUebaAnomaly(id, status),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ueba-anomalies'] }),
+    onError: () => message.error('Ошибка обновления статуса'),
+  })
+
+  const openCount = anomalies.filter(a => a.status === 'open').length
+
+  return (
+    <Card
+      style={{ marginTop: 16 }}
+      title={
+        <Space>
+          <AlertOutlined style={{ color: '#fa8c16' }} />
+          <span>Поведенческие аномалии (UEBA)</span>
+          {openCount > 0 && <Tag color="red">{openCount} открытых</Tag>}
+        </Space>
+      }
+      extra={
+        canEdit && (
+          <Button size="small" onClick={() => scanMut.mutate()} loading={scanMut.isPending}>
+            Запустить UEBA-скан
+          </Button>
+        )
+      }
+    >
+      <Table<UebaAnomaly>
+        dataSource={anomalies}
+        rowKey="id"
+        loading={isLoading}
+        size="small"
+        pagination={{ pageSize: 10 }}
+        locale={{ emptyText: 'Аномалий поведения не обнаружено' }}
+        columns={[
+          {
+            title: 'Сотрудник',
+            dataIndex: 'username',
+            width: 140,
+            render: (u: string) => (
+              <a onClick={() => onSelectUser(u)} style={{ fontWeight: 500 }}>{u}</a>
+            ),
+          },
+          {
+            title: 'Тип',
+            dataIndex: 'anomaly_type',
+            width: 150,
+            render: (t: string) => <Tag>{t}</Tag>,
+          },
+          {
+            title: 'Уровень',
+            dataIndex: 'severity',
+            width: 100,
+            render: (s: string) => (
+              <Tag color={{ critical: 'red', high: 'orange', medium: 'gold', low: 'blue' }[s] || 'default'}>
+                {s}
+              </Tag>
+            ),
+          },
+          { title: 'Описание', dataIndex: 'title', ellipsis: true },
+          {
+            title: 'Статус',
+            dataIndex: 'status',
+            width: 160,
+            render: (st: string, rec: UebaAnomaly) =>
+              canEdit ? (
+                <Select
+                  size="small"
+                  value={st}
+                  style={{ width: 145 }}
+                  onChange={(val) => statusMut.mutate({ id: rec.id, status: val })}
+                  options={[
+                    { value: 'open', label: 'Открыта' },
+                    { value: 'acknowledged', label: 'Принята' },
+                    { value: 'resolved', label: 'Закрыта' },
+                    { value: 'false_positive', label: 'Ложная' },
+                  ]}
+                />
+              ) : (
+                <Tag>{st}</Tag>
+              ),
+          },
+          {
+            title: 'Дата',
+            dataIndex: 'created_at',
+            width: 130,
+            render: (v: string) => dayjs(v).format('DD.MM.YY HH:mm'),
+          },
+        ]}
+      />
+    </Card>
   )
 }

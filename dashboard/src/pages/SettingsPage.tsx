@@ -11,7 +11,8 @@ import {
   fetchBlockedDomains, createBlockedDomain, deleteBlockedDomain,
   fetchBlockedApps, createBlockedApp, deleteBlockedApp,
   fetchOperators, createOperator, updateOperator, deleteOperator,
-  type Operator, type BlockedApp,
+  fetchSiemSettings, updateSiemSettings, testSiemDelivery,
+  type Operator, type BlockedApp, type SiemSettings,
 } from '../api/client'
 import type { Policy, BlockedDomain } from '../api/types'
 import { useAuth } from '../context/AuthContext'
@@ -469,6 +470,127 @@ function BlockedAppsTab() {
   )
 }
 
+function SiemTab() {
+  const qc = useQueryClient()
+  const [form] = Form.useForm()
+  const [testResult, setTestResult] = useState<{ webhook: string; syslog: string; telegram: string } | null>(null)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['siem-settings'],
+    queryFn: fetchSiemSettings,
+  })
+
+  const saveMut = useMutation({
+    mutationFn: (vals: SiemSettings & { webhook_token?: string; telegram_token?: string }) =>
+      updateSiemSettings({
+        enabled: !!vals.enabled,
+        webhook_url: vals.webhook_url || '',
+        webhook_token: vals.webhook_token || undefined,
+        syslog_host: vals.syslog_host || '',
+        syslog_port: Number(vals.syslog_port || 514),
+        syslog_proto: vals.syslog_proto || 'udp',
+        telegram_enabled: !!vals.telegram_enabled,
+        telegram_token: vals.telegram_token || undefined,
+        telegram_chat_id: vals.telegram_chat_id || '',
+        min_severity: vals.min_severity || 'low',
+      }),
+    onSuccess: () => {
+      message.success('Настройки SIEM и оповещений сохранены')
+      qc.invalidateQueries({ queryKey: ['siem-settings'] })
+    },
+    onError: () => message.error('Ошибка сохранения настроек SIEM'),
+  })
+
+  const testMut = useMutation({
+    mutationFn: testSiemDelivery,
+    onSuccess: (res) => {
+      setTestResult(res)
+      message.info('Тестовое событие отправлено')
+    },
+    onError: () => message.error('Ошибка отправки тестового события'),
+  })
+
+  if (isLoading && !data) {
+    return <Card loading />
+  }
+
+  return (
+    <Form
+      form={form}
+      layout="vertical"
+      initialValues={data}
+      onFinish={(v) => saveMut.mutate(v)}
+      style={{ maxWidth: 680 }}
+    >
+      <Space style={{ marginBottom: 16 }}>
+        <Form.Item name="enabled" label="SIEM-коннектор (Webhook / Syslog CEF)" valuePropName="checked" style={{ marginBottom: 0 }}>
+          <Switch />
+        </Form.Item>
+        <Form.Item name="min_severity" label="Мин. уровень инцидента" style={{ marginBottom: 0, width: 180 }}>
+          <Select options={SEVERITIES} />
+        </Form.Item>
+      </Space>
+
+      <Form.Item name="webhook_url" label="SIEM JSON Webhook URL">
+        <Input placeholder="https://siem.company.kz/api/events" />
+      </Form.Item>
+      <Form.Item
+        name="webhook_token"
+        label={`Bearer-токен Webhook ${data?.has_webhook_token ? '(установлен — оставьте пустым, чтобы не менять)' : ''}`}
+      >
+        <Input.Password placeholder="Опционально" />
+      </Form.Item>
+
+      <Space size={12} style={{ display: 'flex' }}>
+        <Form.Item name="syslog_host" label="Syslog / ArcSight CEF Host" style={{ flex: 1, minWidth: 260 }}>
+          <Input placeholder="10.10.0.50" />
+        </Form.Item>
+        <Form.Item name="syslog_port" label="Порт" style={{ width: 110 }}>
+          <Input type="number" min={1} max={65535} />
+        </Form.Item>
+        <Form.Item name="syslog_proto" label="Протокол" style={{ width: 120 }}>
+          <Select options={[{ value: 'udp', label: 'UDP' }, { value: 'tcp', label: 'TCP (RFC 5425)' }]} />
+        </Form.Item>
+      </Space>
+
+      <Form.Item name="telegram_enabled" label="Оповещения в Telegram" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+      <Space size={12} style={{ display: 'flex' }}>
+        <Form.Item
+          name="telegram_token"
+          label={`Bot Token ${data?.has_telegram_token ? '(установлен)' : ''}`}
+          style={{ flex: 1, minWidth: 260 }}
+        >
+          <Input.Password placeholder="123456:ABC..." />
+        </Form.Item>
+        <Form.Item name="telegram_chat_id" label="Chat ID" style={{ width: 200 }}>
+          <Input placeholder="-100..." />
+        </Form.Item>
+      </Space>
+
+      {testResult && (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <Space direction="vertical" size={4}>
+            <span>Webhook: <Tag>{testResult.webhook}</Tag></span>
+            <span>Syslog CEF: <Tag>{testResult.syslog}</Tag></span>
+            <span>Telegram: <Tag>{testResult.telegram}</Tag></span>
+          </Space>
+        </Card>
+      )}
+
+      <Space>
+        <Button type="primary" htmlType="submit" loading={saveMut.isPending}>
+          Сохранить
+        </Button>
+        <Button onClick={() => testMut.mutate()} loading={testMut.isPending}>
+          Отправить тестовое событие
+        </Button>
+      </Space>
+    </Form>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -477,6 +599,7 @@ export default function SettingsPage() {
     { key: 'policies', label: 'DLP Политики', children: <PoliciesTab /> },
     { key: 'domains', label: 'Заблокированные домены', children: <DomainsTab /> },
     { key: 'apps', label: 'Запрещённые приложения', children: <BlockedAppsTab /> },
+    ...(isAdmin ? [{ key: 'siem', label: 'SIEM и Оповещения', children: <SiemTab /> }] : []),
     ...(isAdmin ? [{ key: 'operators', label: 'Операторы', children: <OperatorsTab /> }] : []),
   ]
 

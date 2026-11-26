@@ -51,12 +51,16 @@ pub fn spawn_background_workers(
             .unwrap_or_default();
 
         while let Some(job) = alert_rx.recv().await {
+            let eff = crate::routes::siem::load_effective_siem(&st_alerts).await;
+            if !crate::routes::siem::severity_meets_min(job.severity, eff.min_severity) {
+                continue;
+            }
             let masked = mask_text(&job.snippet);
 
             // Telegram alert (PII-masked, plain HTML-escaped so Windows paths never fail)
             if let (Some(tok), Some(chat)) = (
-                st_alerts.config.telegram_token.as_deref(),
-                st_alerts.config.telegram_chat_id.as_deref(),
+                eff.telegram_token.as_deref(),
+                eff.telegram_chat_id.as_deref(),
             ) {
                 let text = format!(
                     "<b>[QORGAU DLP | {}]</b>\nПользователь: <code>{}</code> ({})\nКанал: <code>{}</code>\nПравила: {}\nФрагмент: <code>{}</code>",
@@ -79,7 +83,7 @@ pub fn spawn_background_workers(
             }
 
             // SIEM JSON Webhook
-            if let Some(url) = st_alerts.config.siem_webhook_url.as_deref() {
+            if let Some(url) = eff.webhook_url.as_deref() {
                 let mut req = http.post(url).json(&json!({
                     "id": job.incident_id,
                     "timestamp": job.ts.to_rfc3339(),
@@ -91,7 +95,7 @@ pub fn spawn_background_workers(
                     "matched_rules": job.rules,
                     "snippet": masked,
                 }));
-                if let Some(tok) = st_alerts.config.siem_webhook_token.as_deref() {
+                if let Some(tok) = eff.webhook_token.as_deref() {
                     req = req.bearer_auth(tok);
                 }
                 if let Err(e) = req.send().await {
@@ -100,7 +104,7 @@ pub fn spawn_background_workers(
             }
 
             // Syslog + ArcSight CEF (ОЦИБ)
-            if let Some(host) = st_alerts.config.siem_syslog_host.as_deref() {
+            if let Some(host) = eff.syslog_host.as_deref() {
                 let msg = format_syslog_cef(
                     &CefIncident {
                         id: job.incident_id,
@@ -113,14 +117,14 @@ pub fn spawn_background_workers(
                         rules: &job.rules,
                         snippet: &masked,
                     },
-                    if st_alerts.config.siem_syslog_proto == "tcp" {
+                    if eff.syslog_proto == "tcp" {
                         4096
                     } else {
                         1350
                     },
                 );
-                let addr = format!("{}:{}", host, st_alerts.config.siem_syslog_port);
-                if st_alerts.config.siem_syslog_proto == "tcp" {
+                let addr = format!("{}:{}", host, eff.syslog_port);
+                if eff.syslog_proto == "tcp" {
                     let framed = format!("{} {}", msg.len(), msg);
                     match TcpStream::connect(&addr).await {
                         Ok(mut stream) => {
@@ -187,6 +191,19 @@ pub fn spawn_background_workers(
         loop {
             interval.tick().await;
             check_risk_thresholds(&st_risk).await;
+        }
+    });
+
+    // 6. UEBA behavioral anomaly scanner (runs every 15 minutes)
+    let st_ueba = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(900));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(e) = crate::routes::ueba::run_ueba_scan(&st_ueba).await {
+                tracing::warn!(error = %e, "UEBA periodic scan failed");
+            }
         }
     });
 }

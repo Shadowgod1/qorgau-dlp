@@ -31,7 +31,7 @@ DATABASE_URL=postgres://qorgau_user:${DB_PASS}@127.0.0.1:5432/qorgau_dlp
 SECRET_KEY=${JWT_SECRET}
 JWT_EXPIRE_MIN=480
 AGENT_TOKEN=${AGENT_TOK}
-CORS_ORIGINS=http://localhost
+CORS_ORIGINS=http://localhost,https://localhost
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=${ADMIN_PASS}
 SCREENSHOTS_DIR=/var/lib/qorgau/screenshots
@@ -55,7 +55,18 @@ service postgresql start || true
 su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='qorgau_user'\" | grep -q 1 || psql -c \"CREATE USER qorgau_user WITH PASSWORD '${DB_PASS}';\""
 su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='qorgau_dlp'\" | grep -q 1 || psql -c \"CREATE DATABASE qorgau_dlp OWNER qorgau_user;\""
 
-# 5. Configure Nginx & systemd
+# 5. Generate self-signed TLS certificate & configure Nginx + systemd
+mkdir -p /etc/qorgau/tls
+if command -v openssl >/dev/null 2>&1; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout /etc/qorgau/tls/qorgau.key \
+        -out /etc/qorgau/tls/qorgau.crt \
+        -subj "/C=KZ/O=Qorgau DLP/CN=qorgau-dlp.local" \
+        -addext "subjectAltName=DNS:localhost,DNS:qorgau-dlp.local,IP:127.0.0.1" >/dev/null 2>&1 || true
+    chmod 600 /etc/qorgau/tls/qorgau.key
+    chmod 644 /etc/qorgau/tls/qorgau.crt
+fi
+
 cp /opt/qorgau/nginx-native.conf /etc/nginx/sites-available/qorgau
 rm -f /etc/nginx/sites-enabled/default
 ln -sf /etc/nginx/sites-available/qorgau /etc/nginx/sites-enabled/qorgau
@@ -67,10 +78,11 @@ cat >/etc/issue <<EOF
 
 ============================================================
   QORGAU DLP v2.0 Appliance (Rust Edition)
-  Web Console : http://\4/
+  Web Console : https://\4/  (HTTP: http://\4/)
   Login       : admin / ${ADMIN_PASS}
   Agent Token : ${AGENT_TOK}
   Config File : /etc/qorgau/qorgau.env
+  TLS Cert    : /etc/qorgau/tls/qorgau.crt
 ============================================================
 
 EOF

@@ -11,7 +11,9 @@ pub mod olap;
 pub mod prevention;
 pub mod reports;
 pub mod rules;
+pub mod siem;
 pub mod timeline;
+pub mod ueba;
 pub mod users;
 
 use std::sync::Arc;
@@ -37,4 +39,6 @@ pub fn api_v1_router() -> Router<Arc<AppState>> {
         .merge(users::router())
         .merge(prevention::router())
         .merge(monitor::router())
+        .merge(siem::router())
+        .merge(ueba::router())
 }
