@@ -12,7 +12,8 @@ import {
   fetchBlockedApps, createBlockedApp, deleteBlockedApp,
   fetchOperators, createOperator, updateOperator, deleteOperator,
   fetchSiemSettings, updateSiemSettings, testSiemDelivery,
-  type Operator, type BlockedApp, type SiemSettings,
+  fetchAdSettings, updateAdSettings, fetchAdUsers,
+  type Operator, type BlockedApp, type SiemSettings, type AdSettings, type AdUser,
 } from '../api/client'
 import type { Policy, BlockedDomain } from '../api/types'
 import { useAuth } from '../context/AuthContext'
@@ -31,7 +32,7 @@ const ROLE_COLOR: Record<string, string> = {
   admin: 'red', security_officer: 'orange', viewer: 'blue',
 }
 
-const CHANNELS = ['usb','web','messenger','clipboard','network','print','app','*'].map(c => ({ label: c, value: c }))
+const CHANNELS = ['usb','web','mail','messenger','clipboard','network','print','app','*'].map(c => ({ label: c, value: c }))
 const ACTIONS = ['alert','block','log'].map(a => ({ label: a, value: a }))
 const SEVERITIES = ['low','medium','high','critical'].map(s => ({ label: s, value: s }))
 const CATEGORIES = ['social','adult','gambling','streaming','crypto','storage','productivity','other']
@@ -591,6 +592,89 @@ function SiemTab() {
   )
 }
 
+function AdDirectoryTab() {
+  const qc = useQueryClient()
+  const [form] = Form.useForm()
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['ad-settings'],
+    queryFn: fetchAdSettings,
+  })
+  const { data: adUsers = [] } = useQuery({
+    queryKey: ['ad-users'],
+    queryFn: () => fetchAdUsers(),
+  })
+
+  const saveMut = useMutation({
+    mutationFn: (vals: Partial<AdSettings>) => updateAdSettings(vals),
+    onSuccess: () => {
+      message.success('Настройки Active Directory / LDAP сохранены')
+      qc.invalidateQueries({ queryKey: ['ad-settings'] })
+    },
+    onError: () => message.error('Ошибка сохранения настроек AD/LDAP'),
+  })
+
+  if (isLoading && !data) return <Card loading />
+
+  return (
+    <div>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={data}
+        onFinish={(v) => saveMut.mutate(v)}
+        style={{ maxWidth: 680, marginBottom: 24 }}
+      >
+        <Form.Item name="enabled" label="Интеграция с Active Directory / LDAP" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Space size={12} style={{ display: 'flex' }}>
+          <Form.Item name="server_url" label="LDAP / LDAPS URL" style={{ flex: 1, minWidth: 260 }}>
+            <Input placeholder="ldaps://dc01.company.kz:636" />
+          </Form.Item>
+          <Form.Item name="sync_interval_min" label="Интервал (мин)" style={{ width: 140 }}>
+            <Input type="number" min={5} max={1440} />
+          </Form.Item>
+        </Space>
+        <Form.Item name="base_dn" label="Base DN">
+          <Input placeholder="DC=company,DC=kz" />
+        </Form.Item>
+        <Form.Item name="bind_dn" label="Bind DN (сервисная учётная запись)">
+          <Input placeholder="CN=svc_qorgau,OU=ServiceAccounts,DC=company,DC=kz" />
+        </Form.Item>
+        <Form.Item name="corporate_domains" label="Корпоративные почтовые домены (через запятую)">
+          <Input placeholder="company.kz, subsidiary.kz" />
+        </Form.Item>
+        <Space>
+          <Button type="primary" htmlType="submit" loading={saveMut.isPending}>
+            Сохранить настройки AD
+          </Button>
+          {data?.last_sync_at && (
+            <Tag color="blue">
+              Последняя синхронизация: {dayjs(data.last_sync_at).format('DD.MM.YY HH:mm')} ({data.synced_count} польз.)
+            </Tag>
+          )}
+        </Space>
+      </Form>
+
+      <Table<AdUser>
+        dataSource={adUsers}
+        rowKey="username"
+        size="small"
+        pagination={{ pageSize: 15 }}
+        locale={{ emptyText: 'Пользователи AD ещё не импортированы (POST /api/v1/directory/import)' }}
+        columns={[
+          { title: 'Логин', dataIndex: 'username', width: 140 },
+          { title: 'ФИО', dataIndex: 'full_name', width: 200 },
+          { title: 'Отдел', dataIndex: 'department', width: 160 },
+          { title: 'Должность', dataIndex: 'title', width: 160 },
+          { title: 'Email', dataIndex: 'email', ellipsis: true },
+        ]}
+      />
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -600,6 +684,7 @@ export default function SettingsPage() {
     { key: 'domains', label: 'Заблокированные домены', children: <DomainsTab /> },
     { key: 'apps', label: 'Запрещённые приложения', children: <BlockedAppsTab /> },
     ...(isAdmin ? [{ key: 'siem', label: 'SIEM и Оповещения', children: <SiemTab /> }] : []),
+    ...(isAdmin ? [{ key: 'ad', label: 'Active Directory / LDAP', children: <AdDirectoryTab /> }] : []),
     ...(isAdmin ? [{ key: 'operators', label: 'Операторы', children: <OperatorsTab /> }] : []),
   ]
 

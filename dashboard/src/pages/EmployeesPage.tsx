@@ -10,8 +10,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import {
   fetchEmployeeProfile, fetchEmployees, fetchRiskThreshold, updateRiskThreshold,
-  fetchUebaAnomalies, patchUebaAnomaly, triggerUebaScan,
-  type EmployeeSummary, type UebaAnomaly,
+  fetchUebaAnomalies, patchUebaAnomaly, triggerUebaScan, fetchMailEvents,
+  type EmployeeSummary, type UebaAnomaly, type MailEvent,
 } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
@@ -396,6 +396,8 @@ export default function EmployeesPage() {
 
       <UebaAnomaliesCard onSelectUser={setSelectedUser} />
 
+      <MailEventsCard onSelectUser={setSelectedUser} />
+
       <EmployeeCardDrawer username={selectedUser} days={days} onClose={() => setSelectedUser(null)} />
     </div>
   )
@@ -500,6 +502,61 @@ function UebaAnomaliesCard({ onSelectUser }: { onSelectUser: (u: string) => void
               ) : (
                 <Tag>{st}</Tag>
               ),
+          },
+          {
+            title: 'Дата',
+            dataIndex: 'created_at',
+            width: 130,
+            render: (v: string) => dayjs(v).format('DD.MM.YY HH:mm'),
+          },
+        ]}
+      />
+    </Card>
+  )
+}
+
+function MailEventsCard({ onSelectUser }: { onSelectUser: (u: string) => void }) {
+  const { data: mails = [], isLoading } = useQuery({
+    queryKey: ['mail-events'],
+    queryFn: () => fetchMailEvents({ limit: 50 }),
+  })
+
+  return (
+    <Card style={{ marginTop: 16 }} title="Почтовый перехват (SMTP / IMAP / Outlook)">
+      <Table<MailEvent>
+        dataSource={mails}
+        rowKey="id"
+        loading={isLoading}
+        size="small"
+        pagination={{ pageSize: 10 }}
+        locale={{ emptyText: 'Почтовых событий пока нет (POST /api/v1/mail/events)' }}
+        columns={[
+          {
+            title: 'Сотрудник',
+            dataIndex: 'username',
+            width: 120,
+            render: (u: string) => <a onClick={() => onSelectUser(u)}>{u}</a>,
+          },
+          {
+            title: 'Протокол',
+            dataIndex: 'protocol',
+            width: 90,
+            render: (p: string) => <Tag>{p.toUpperCase()}</Tag>,
+          },
+          { title: 'Отправитель', dataIndex: 'sender', width: 180, ellipsis: true },
+          {
+            title: 'Получатели',
+            dataIndex: 'recipients',
+            width: 200,
+            ellipsis: true,
+            render: (r: string[]) => (Array.isArray(r) ? r.join(', ') : ''),
+          },
+          { title: 'Тема', dataIndex: 'subject', ellipsis: true },
+          {
+            title: 'Статус',
+            dataIndex: 'blocked',
+            width: 110,
+            render: (b: boolean) => <Tag color={b ? 'red' : 'green'}>{b ? 'Заблокировано' : 'Пропущено'}</Tag>,
           },
           {
             title: 'Дата',

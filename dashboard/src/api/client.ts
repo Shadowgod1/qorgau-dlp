@@ -654,3 +654,60 @@ export const patchUebaAnomaly = (id: number, status: string) =>
 
 export const triggerUebaScan = () =>
   http.post<{ detected: number }>('/ueba/scan').then(r => r.data)
+
+// ── Mail DLP (SMTP / IMAP / Outlook) ─────────────────────────────────────────
+export interface MailEvent {
+  id: number
+  agent_id: string
+  username: string
+  direction: string
+  protocol: string
+  sender: string
+  recipients: string[]
+  subject: string
+  body_preview: string
+  attachments: { filename: string; size_bytes: number; sha256: string }[]
+  blocked: boolean
+  incident_id: number | null
+  created_at: string
+}
+
+export const fetchMailEvents = (params?: { username?: string; direction?: string; blocked?: boolean; limit?: number }) =>
+  http.get<MailEvent[]>('/mail/events', { params }).then(r => r.data)
+
+// ── Active Directory / LDAP ──────────────────────────────────────────────────
+export interface AdSettings {
+  enabled: boolean
+  server_url: string
+  base_dn: string
+  bind_dn: string
+  corporate_domains: string
+  sync_interval_min: number
+  last_sync_at: string | null
+  last_sync_status: string
+  synced_count: number
+}
+
+export interface AdUser {
+  username: string
+  full_name: string
+  email: string
+  department: string
+  title: string
+  manager: string
+  is_enabled: boolean
+  distinguished_name: string
+  synced_at: string
+}
+
+export const fetchAdSettings = () =>
+  http.get<AdSettings>('/directory/settings').then(r => r.data)
+
+export const updateAdSettings = (data: Partial<AdSettings>) =>
+  http.put<AdSettings>('/directory/settings', data).then(r => r.data)
+
+export const fetchAdUsers = (params?: { search?: string; department?: string }) =>
+  http.get<AdUser[]>('/directory/users', { params }).then(r => r.data)
+
+export const importAdUsers = (users: Partial<AdUser>[]) =>
+  http.post<{ synced: number }>('/directory/import', { users }).then(r => r.data)

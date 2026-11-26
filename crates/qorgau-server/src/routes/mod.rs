@@ -3,8 +3,10 @@ pub mod agents;
 pub mod audit;
 pub mod auth;
 pub mod configs;
+pub mod directory;
 pub mod events;
 pub mod incidents;
+pub mod mail;
 pub mod media;
 pub mod monitor;
 pub mod olap;
@@ -41,4 +43,6 @@ pub fn api_v1_router() -> Router<Arc<AppState>> {
         .merge(monitor::router())
         .merge(siem::router())
         .merge(ueba::router())
+        .merge(mail::router())
+        .merge(directory::router())
 }

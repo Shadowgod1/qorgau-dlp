@@ -27,8 +27,8 @@ tags: [qorgau-dlp, ibatyr, roadmap, comparison]
 
 ## Дорожная карта развития (Вариант C — Enterprise Scale)
 
-- [ ] **Интеграция с Active Directory / LDAP** — автоматический импорт оргструктуры, отделов, ФИО и SSO-авторизация операторов.
-- [ ] **Почтовый перехват (SMTP / IMAP / Outlook Add-in)** — контроль вложений и исходящих писем с теневым копированием.
+- [x] **Интеграция с Active Directory / LDAP** — синхронизация оргструктуры, отделов, должностей и корпоративных доменов (`/directory/settings`, `/directory/import`, `/directory/users`).
+- [x] **Почтовый перехват (SMTP / IMAP / Outlook Add-in)** — приём и DLP-анализ писем и вложений в реальном времени с блокировкой и инцидентами (`/mail/events`).
 - [ ] **Кроссплатформенные агенты** — Linux (`x86_64` / Astra Linux / Ubuntu) и macOS на единой кодовой базе `qorgau-common`.
 - [x] **SIEM-коннектор (CEF / Syslog RFC 5424 / Webhook)** — потоковая отправка алертов в QRadar, Splunk, Wazuh, MaxPatrol SIEM + управление и тест в веб-консоли (`/settings/siem`).
 - [x] **Детекция аномалий (UEBA)** — выявление ночной активности, массового копирования/USB и резкого всплеска инцидентов относительно 14-дневного базового профиля (`/ueba/anomalies`).
